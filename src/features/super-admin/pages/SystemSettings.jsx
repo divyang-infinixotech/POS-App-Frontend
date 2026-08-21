@@ -1,0 +1,250 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { superAdminApi } from '../../../api/superAdmin.api';
+import { Loader2, Save, RefreshCw, RotateCcw, Shield, AlertTriangle } from 'lucide-react';
+import ConfirmationDialog from '../../../components/ConfirmationDialog';
+
+// Backend masks configured secrets with this marker — the UI treats it as
+// "preserved": typing nothing keeps the stored (encrypted) value.
+const SECRET_MASK = '********';
+
+const SETTING_FIELDS = [
+  { key: 'platform_name', label: 'Platform Name', type: 'text', default: 'Restaurant POS' },
+  { key: 'default_trial_days', label: 'Default Trial Days', type: 'number', default: 15 },
+  { key: 'maintenance_mode', label: 'Maintenance Mode', type: 'boolean', default: false },
+  { key: 'max_file_upload_mb', label: 'Max File Upload (MB)', type: 'number', default: 5 },
+  { key: 'smtp_host', label: 'SMTP Host', type: 'text', default: '' },
+  { key: 'smtp_port', label: 'SMTP Port', type: 'number', default: 587 },
+  { key: 'smtp_user', label: 'SMTP Username', type: 'text', default: '' },
+  { key: 'smtp_pass', label: 'SMTP Password', type: 'password', default: '' },
+  { key: 'smtp_from_email', label: 'SMTP From Email', type: 'text', default: '' },
+  { key: 'payment_gateway', label: 'Payment Gateway', type: 'select', options: ['RAZORPAY', 'CASHFREE', 'PHONEPE', 'PAYTM', 'STRIPE', 'NONE'], default: 'NONE' },
+  { key: 'razorpay_key', label: 'Razorpay Key', type: 'text', default: '' },
+  { key: 'razorpay_secret', label: 'Razorpay Secret', type: 'password', default: '' },
+  { key: 'tax_percentage', label: 'Default Tax %', type: 'number', default: 5 },
+  { key: 'currency', label: 'Default Currency', type: 'text', default: 'INR' },
+];
+
+// Normalized equality for dirty tracking: numbers compare numerically (a loaded
+// "5" and a typed 5 are the same), everything else strictly.
+const sameValue = (a, b) => {
+  if (a === b) return true;
+  if (a === null || a === undefined || a === '') return (b === null || b === undefined || b === '');
+  if (b === null || b === undefined || b === '') return false;
+  if (typeof a === 'number' || typeof b === 'number') return Number(a) === Number(b);
+  return false;
+};
+
+export default function SystemSettings() {
+  const [original, setOriginal] = useState({}); // last loaded/saved values
+  const [settings, setSettings] = useState({}); // live form values
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [confirmRefresh, setConfirmRefresh] = useState(false);
+  const [toast, setToast] = useState(null);
+  const toastTimer = useRef(null);
+  const savingRef = useRef(false);
+
+  useEffect(() => { loadSettings(); return () => clearTimeout(toastTimer.current); }, []);
+
+  const showToast = (msg, type = 'success') => {
+    setToast({ msg, type });
+    clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(null), 2500);
+  };
+
+  const loadSettings = async () => {
+    try {
+      setLoading(true);
+      const resp = await superAdminApi.getSettings();
+      if (resp.success) {
+        const data = resp.data || {};
+        setOriginal(data);
+        setSettings(data);
+      } else {
+        showToast(resp.message || 'Failed to load settings', 'error');
+      }
+    } catch (e) {
+      showToast(e.message || 'Unable to connect to the server', 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const dirty = SETTING_FIELDS.some(f => !sameValue(settings[f.key], original[f.key]));
+
+  const handleChange = (key, value) => {
+    setSettings(prev => ({ ...prev, [key]: value }));
+  };
+
+  // Build the payload of CHANGED fields only. Unchanged secrets stay out of the
+  // request entirely, so the backend preserves the stored (encrypted) value.
+  const buildPayload = () => {
+    const payload = {};
+    SETTING_FIELDS.forEach(f => {
+      const cur = settings[f.key];
+      const orig = original[f.key];
+      if (sameValue(cur, orig)) return; // unchanged — never send back
+      if (f.type === 'password' && cur === SECRET_MASK) return; // masked placeholder → preserve
+      payload[f.key] = cur;
+    });
+    return payload;
+  };
+
+  const handleSave = async () => {
+    if (savingRef.current) return; // double-click guard
+    const payload = buildPayload();
+    if (Object.keys(payload).length === 0) return;
+    savingRef.current = true;
+    setSaving(true);
+    try {
+      const resp = await superAdminApi.updateSettings(payload);
+      if (resp.success) {
+        // Server returns the sanitized settings map — that becomes the new baseline.
+        const data = resp.data || {};
+        setOriginal(data);
+        setSettings(data);
+        showToast('Settings saved successfully.');
+      } else {
+        showToast(resp.message || 'Unable to save settings', 'error');
+      }
+    } catch (e) {
+      // Keep the user's entered values — never silently revert the form.
+      const status = e.status;
+      const msg = e.message || 'Unable to save settings';
+      let mapped;
+      if (status === 400) mapped = msg; // backend validation message
+      else if (status === 401) mapped = 'Your session has expired. Please log in again.';
+      else if (status === 403) mapped = 'You do not have permission to change settings';
+      else if (status === 404 || status === 409) mapped = 'Unable to save settings';
+      else if (status === 0) mapped = 'Unable to connect to the server';
+      else if (status === undefined && /timed out|ECONNABORTED/i.test(msg)) mapped = 'The server took too long to respond';
+      else if (status === undefined && /failed to fetch|network|ECONN/i.test(msg)) mapped = 'Unable to connect to the server';
+      else if (status >= 500) mapped = 'Unable to save settings';
+      else mapped = msg;
+      showToast(mapped, 'error');
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
+  };
+
+  const handleReset = () => {
+    if (!dirty) return;
+    setSettings(original); // restore last loaded/saved values — no API call
+  };
+
+  const handleRefresh = () => {
+    if (dirty) {
+      setConfirmRefresh(true);
+      return;
+    }
+    loadSettings();
+  };
+
+  if (loading) {
+    return <div className="flex items-center justify-center h-64"><Loader2 className="w-8 h-8 animate-spin text-[#16A34A]" /></div>;
+  }
+
+  return (
+    <div className="space-y-4 animate-fade-in max-w-2xl">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-extrabold text-slate-800">System Settings</h1>
+          <p className="text-xs text-slate-500 mt-1">Platform-wide configuration</p>
+        </div>
+        <button
+          onClick={handleRefresh}
+          title="Refresh"
+          disabled={saving}
+          className="h-11 w-11 flex items-center justify-center bg-white border border-slate-200 rounded-xl hover:bg-slate-50 disabled:opacity-50 cursor-pointer"
+        >
+          <RefreshCw className={`w-4 h-4 text-slate-500 ${saving ? 'animate-spin' : ''}`} />
+        </button>
+      </div>
+
+      <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-4">
+        {SETTING_FIELDS.map(field => {
+          const value = settings[field.key] ?? field.default;
+          return (
+            <div key={field.key} className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
+              <label className="text-xs font-bold text-slate-600 sm:w-44 shrink-0">{field.label}</label>
+              <div className="flex-1 min-w-0">
+                {field.type === 'boolean' ? (
+                  <label className="flex items-center gap-2 cursor-pointer h-11">
+                    <input type="checkbox" checked={!!value} onChange={e => handleChange(field.key, e.target.checked)} disabled={saving} className="w-5 h-5 accent-[#16A34A]" />
+                    <span className="text-xs text-slate-500">{value ? 'Enabled' : 'Disabled'}</span>
+                  </label>
+                ) : field.type === 'select' ? (
+                  <select value={value} onChange={e => handleChange(field.key, e.target.value)} disabled={saving} className="w-full h-11 px-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold outline-none focus:border-[#16A34A] disabled:opacity-50">
+                    {field.options.map(o => <option key={o} value={o}>{o}</option>)}
+                  </select>
+                ) : (
+                  <input
+                    type={field.type || 'text'}
+                    value={value}
+                    onChange={e => handleChange(field.key, field.type === 'number' ? Number(e.target.value) : e.target.value)}
+                    disabled={saving}
+                    className="w-full h-11 px-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold outline-none focus:border-[#16A34A] disabled:opacity-50"
+                  />
+                )}
+                {field.type === 'password' && value === SECRET_MASK && (
+                  <p className="text-[10px] text-slate-400 mt-1 flex items-center gap-1">
+                    <Shield className="w-3 h-3" /> Stored secret is preserved — leave as-is to keep it.
+                  </p>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Single global save area — the only Save action on this page */}
+      <div className="bg-white border border-slate-200 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="flex items-center gap-1.5 min-h-6">
+          {dirty ? (
+            <span className="flex items-center gap-1.5 text-xs font-bold text-amber-600">
+              <AlertTriangle className="w-3.5 h-3.5" /> Unsaved changes
+            </span>
+          ) : (
+            <span className="text-xs text-slate-400">All changes saved</span>
+          )}
+        </div>
+        <div className="flex items-center gap-2.5">
+          <button
+            onClick={handleReset}
+            disabled={!dirty || saving}
+            className="h-11 px-4 bg-white border border-slate-200 hover:bg-slate-50 text-slate-600 rounded-xl text-xs font-bold transition-all disabled:opacity-40 cursor-pointer flex items-center gap-1.5"
+          >
+            <RotateCcw className="w-3.5 h-3.5" />
+            Reset Changes
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={!dirty || saving}
+            className="h-11 px-5 bg-[#16A34A] hover:bg-[#15803D] text-white rounded-xl text-sm font-bold transition-all disabled:opacity-40 cursor-pointer flex items-center gap-1.5"
+          >
+            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+            {saving ? 'Saving...' : 'Save Changes'}
+          </button>
+        </div>
+      </div>
+
+      <ConfirmationDialog
+        isOpen={confirmRefresh}
+        onClose={() => setConfirmRefresh(false)}
+        onConfirm={() => { setConfirmRefresh(false); loadSettings(); }}
+        title="Discard unsaved changes?"
+        message="You have unsaved changes. Refresh will reload settings from the server and discard them."
+        confirmLabel="Discard & Refresh"
+        cancelLabel="Keep Editing"
+        variant="warning"
+      />
+
+      {toast && (
+        <div className={`fixed bottom-4 right-4 z-50 rounded-xl px-4 py-3 text-xs font-bold shadow-lg animate-slide-up ${toast.type === 'error' ? 'bg-red-50 border border-red-200 text-red-700' : 'bg-green-50 border border-green-200 text-green-700'}`}>
+          {toast.msg}
+        </div>
+      )}
+    </div>
+  );
+}
