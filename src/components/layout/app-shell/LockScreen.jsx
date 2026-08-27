@@ -304,7 +304,7 @@ export default function LockScreen() {
             )}
           </div>
           <h1 className="text-lg font-extrabold text-white tracking-tight">
-            {settings.branding.restaurantName || 'Restaurant POS'}
+            Nirka POS
           </h1>
           <p className="text-[10px] font-semibold text-slate-400 mt-1 uppercase tracking-widest">
             Terminal Locked

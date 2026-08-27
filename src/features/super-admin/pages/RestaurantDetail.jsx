@@ -1,14 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { superAdminApi } from '../../../api/superAdmin.api';
-import { useUiStore } from '../../../store';
 import { FEATURE_LABELS } from '../../../utils/permissions';
 import {
   ArrowLeft,
   Loader2,
   Building2,
-  Users,
-  ShoppingCart,
-  Activity,
   Mail,
   Phone,
   MapPin,
@@ -19,19 +15,21 @@ import {
   RotateCcw,
   PlayCircle,
   XCircle,
-  AlertTriangle,
   CheckCircle2,
-  XCircle as XCircleIcon,
   History,
+  Users,
+  Layers,
+  Utensils,
+  Printer,
+  Network,
+  ShoppingCart,
+  HardDrive,
 } from 'lucide-react';
 import PlanChangeDialog from '../components/PlanChangeDialog';
 
 const TABS = [
   { id: 'general', label: 'General', icon: Building2 },
   { id: 'subscription', label: 'Subscription', icon: CreditCard },
-  { id: 'users', label: 'Users', icon: Users },
-  { id: 'orders', label: 'Orders Summary', icon: ShoppingCart },
-  { id: 'activity', label: 'Activity Log', icon: Activity },
 ];
 
 const CHANGE_TYPE_BADGES = {
@@ -46,18 +44,17 @@ const CHANGE_TYPE_BADGES = {
 };
 
 const LIMIT_ITEMS = [
-  { key: 'maxUsers', label: 'Max Users' },
-  { key: 'maxTables', label: 'Max Tables' },
-  { key: 'maxFloors', label: 'Max Floors' },
-  { key: 'maxMenuItems', label: 'Max Menu Items' },
-  { key: 'maxPrinters', label: 'Max Printers' },
-  { key: 'maxBranches', label: 'Max Branches' },
-  { key: 'maxOrdersPerMonth', label: 'Max Orders/Month' },
-  { key: 'storageLimitMB', label: 'Storage (MB)' },
+  { key: 'maxUsers', label: 'Max Users', icon: Users },
+  { key: 'maxTables', label: 'Max Tables', icon: Layers },
+  { key: 'maxFloors', label: 'Max Floors', icon: Building2 },
+  { key: 'maxMenuItems', label: 'Max Menu Items', icon: Utensils },
+  { key: 'maxPrinters', label: 'Max Printers', icon: Printer },
+  { key: 'maxBranches', label: 'Max Branches', icon: Network },
+  { key: 'maxOrdersPerMonth', label: 'Max Orders/Month', icon: ShoppingCart },
+  { key: 'storageLimitMB', label: 'Storage (MB)', icon: HardDrive },
 ];
 
 export default function RestaurantDetail({ restaurantId, onBack, onPlanChanged }) {
-  const { setScreen } = useUiStore();
   const [restaurant, setRestaurant] = useState(null);
   const [plans, setPlans] = useState([]);
   const [history, setHistory] = useState([]);
@@ -121,7 +118,7 @@ export default function RestaurantDetail({ restaurantId, onBack, onPlanChanged }
     return (
       <div className="text-center py-16">
         <p className="text-slate-400 font-medium">Restaurant not found</p>
-        <button onClick={onBack} className="mt-4 text-sm text-[#16A34A] font-bold">Go back</button>
+        <button onClick={onBack} className="mt-4 text-sm text-[#16A34A] font-bold cursor-pointer">Go back</button>
       </div>
     );
   }
@@ -139,27 +136,9 @@ export default function RestaurantDetail({ restaurantId, onBack, onPlanChanged }
         </div>
       </div>
 
-      {/* Stats Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        {[
-          { label: 'Total Users', value: restaurant.statistics?.totalUsers || 0, icon: Users, color: 'blue' },
-          { label: 'Total Orders', value: restaurant.statistics?.totalOrders || 0, icon: ShoppingCart, color: 'emerald' },
-          { label: 'Total Revenue', value: `₹${(restaurant.statistics?.totalRevenue || 0).toLocaleString()}`, icon: CreditCard, color: 'amber' },
-          { label: 'Menu Items', value: restaurant.statistics?.totalMenuItems || 0, icon: FileText, color: 'purple' },
-        ].map((stat, i) => (
-          <div key={i} className="bg-white border border-slate-200 rounded-xl p-3.5">
-            <div className="flex items-center justify-between mb-1.5">
-              <stat.icon className={`w-4 h-4 text-${stat.color}-500`} />
-            </div>
-            <p className="text-lg font-extrabold text-slate-800">{stat.value}</p>
-            <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">{stat.label}</p>
-          </div>
-        ))}
-      </div>
-
       {/* Tabs */}
       <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-        <div className="flex border-b border-slate-100 overflow-x-auto">
+        <div className="flex border-b border-slate-100">
           {TABS.map(tab => (
             <button
               key={tab.id}
@@ -178,23 +157,67 @@ export default function RestaurantDetail({ restaurantId, onBack, onPlanChanged }
 
         <div className="p-4">
           {activeTab === 'general' && (
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-3">
-                <h4 className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500">Contact</h4>
-                <div className="space-y-2">
-                  <div className="flex items-center gap-2 text-xs text-slate-600"><Mail className="w-3.5 h-3.5 text-slate-400" /> {restaurant.email || '—'}</div>
-                  <div className="flex items-center gap-2 text-xs text-slate-600"><Phone className="w-3.5 h-3.5 text-slate-400" /> {restaurant.phone || '—'}</div>
-                  <div className="flex items-center gap-2 text-xs text-slate-600"><MapPin className="w-3.5 h-3.5 text-slate-400" /> {restaurant.address || '—'}</div>
-                </div>
-              </div>
-              <div className="space-y-3">
-                <h4 className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500">Details</h4>
-                <div className="space-y-2 text-xs text-slate-600">
-                  <p><span className="font-bold text-slate-500">GST:</span> {restaurant.gstNumber || '—'}</p>
-                  <p><span className="font-bold text-slate-500">FSSAI:</span> {restaurant.fssaiNumber || '—'}</p>
-                  <p><span className="font-bold text-slate-500">Timezone:</span> {restaurant.timezone}</p>
-                  <p><span className="font-bold text-slate-500">Currency:</span> {restaurant.currency}</p>
-                  <p><span className="font-bold text-slate-500">Language:</span> {restaurant.language}</p>
+            <div className="space-y-6">
+              {/* General Information */}
+              <div>
+                <h3 className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500 mb-3">General Information</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-3">
+                    <div className="flex items-start gap-3 p-3 bg-slate-50 rounded-xl">
+                      <Building2 className="w-4 h-4 text-slate-400 mt-0.5 shrink-0" />
+                      <div>
+                        <p className="text-[9px] font-bold text-slate-400 uppercase">Restaurant Name</p>
+                        <p className="text-sm font-bold text-slate-700 mt-0.5">{restaurant.name || '—'}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-start gap-3 p-3 bg-slate-50 rounded-xl">
+                      <Users className="w-4 h-4 text-slate-400 mt-0.5 shrink-0" />
+                      <div>
+                        <p className="text-[9px] font-bold text-slate-400 uppercase">Owner / Contact Person</p>
+                        <p className="text-sm font-bold text-slate-700 mt-0.5">{restaurant.ownerName || '—'}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-start gap-3 p-3 bg-slate-50 rounded-xl">
+                      <Mail className="w-4 h-4 text-slate-400 mt-0.5 shrink-0" />
+                      <div>
+                        <p className="text-[9px] font-bold text-slate-400 uppercase">Email</p>
+                        <p className="text-sm font-bold text-slate-700 mt-0.5">{restaurant.email || '—'}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-start gap-3 p-3 bg-slate-50 rounded-xl">
+                      <Phone className="w-4 h-4 text-slate-400 mt-0.5 shrink-0" />
+                      <div>
+                        <p className="text-[9px] font-bold text-slate-400 uppercase">Phone</p>
+                        <p className="text-sm font-bold text-slate-700 mt-0.5">{restaurant.phone || '—'}</p>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="space-y-3">
+                    <div className="flex items-start gap-3 p-3 bg-slate-50 rounded-xl">
+                      <MapPin className="w-4 h-4 text-slate-400 mt-0.5 shrink-0" />
+                      <div>
+                        <p className="text-[9px] font-bold text-slate-400 uppercase">Address</p>
+                        <p className="text-sm font-bold text-slate-700 mt-0.5">{restaurant.address || '—'}</p>
+                        <p className="text-xs text-slate-500 mt-0.5">
+                          {[restaurant.city, restaurant.state, restaurant.country].filter(Boolean).join(', ')}
+                        </p>
+                        {restaurant.pincode && <p className="text-xs text-slate-500">{restaurant.pincode}</p>}
+                      </div>
+                    </div>
+                    <div className="flex items-start gap-3 p-3 bg-slate-50 rounded-xl">
+                      <FileText className="w-4 h-4 text-slate-400 mt-0.5 shrink-0" />
+                      <div>
+                        <p className="text-[9px] font-bold text-slate-400 uppercase">Business Details</p>
+                        <div className="space-y-1 mt-1">
+                          <p className="text-xs text-slate-600"><span className="font-bold text-slate-500">GST:</span> {restaurant.gstNumber || '—'}</p>
+                          <p className="text-xs text-slate-600"><span className="font-bold text-slate-500">FSSAI:</span> {restaurant.fssaiNumber || '—'}</p>
+                          <p className="text-xs text-slate-600"><span className="font-bold text-slate-500">Timezone:</span> {restaurant.timezone}</p>
+                          <p className="text-xs text-slate-600"><span className="font-bold text-slate-500">Currency:</span> {restaurant.currency}</p>
+                          <p className="text-xs text-slate-600"><span className="font-bold text-slate-500">Language:</span> {restaurant.language}</p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -207,20 +230,20 @@ export default function RestaurantDetail({ restaurantId, onBack, onPlanChanged }
               ) : (
                 <>
                   {/* Status banner */}
-                  <div className={`p-3 rounded-xl border flex items-center justify-between flex-wrap gap-2 ${
+                  <div className={`p-4 rounded-xl border flex items-center justify-between flex-wrap gap-3 ${
                     sub.status === 'ACTIVE' ? 'bg-green-50/60 border-green-200' :
                     sub.status === 'TRIAL' ? 'bg-blue-50/60 border-blue-200' :
                     sub.status === 'EXPIRED' ? 'bg-red-50/60 border-red-200' :
                     sub.status === 'CANCELLED' ? 'bg-slate-50 border-slate-200' : 'bg-amber-50/60 border-amber-200'
                   }`}>
-                    <div className="flex items-center gap-2">
-                      <CreditCard className="w-4 h-4 text-slate-500" />
+                    <div className="flex items-center gap-3">
+                      <CreditCard className="w-5 h-5 text-slate-500" />
                       <div>
-                        <p className="text-xs font-extrabold text-slate-800">
+                        <p className="text-sm font-extrabold text-slate-800">
                           {sub.plan} {sub.status === 'ACTIVE' && daysRemaining !== null ? `· ${daysRemaining} days left` : `· ${sub.status}`}
                         </p>
                         <p className="text-[10px] text-slate-500">
-                          {sub.billingCycle} billing {sub.autoRenew ? '· Auto-renew pref (manual renewal)' : ''} {sub.amount ? `· ₹${sub.amount}` : ''}
+                          {sub.billingCycle} billing {sub.amount ? `· ₹${sub.amount}` : ''}
                         </p>
                       </div>
                     </div>
@@ -238,24 +261,27 @@ export default function RestaurantDetail({ restaurantId, onBack, onPlanChanged }
                   </div>
 
                   {/* Key dates */}
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                    <div className="bg-slate-50 rounded-xl p-3">
-                      <p className="text-[10px] font-bold text-slate-500 uppercase">Start Date</p>
-                      <p className="text-sm font-extrabold text-slate-800 mt-1">{sub.startDate ? new Date(sub.startDate).toLocaleDateString() : '—'}</p>
-                    </div>
-                    <div className="bg-slate-50 rounded-xl p-3">
-                      <p className="text-[10px] font-bold text-slate-500 uppercase">Expiry Date</p>
-                      <p className="text-sm font-extrabold text-slate-800 mt-1">{sub.expiryDate ? new Date(sub.expiryDate).toLocaleDateString() : '—'}</p>
-                    </div>
-                    <div className="bg-slate-50 rounded-xl p-3">
-                      <p className="text-[10px] font-bold text-slate-500 uppercase">Next Renewal</p>
-                      <p className="text-sm font-extrabold text-slate-800 mt-1">{sub.nextRenewalDate ? new Date(sub.nextRenewalDate).toLocaleDateString() : '—'}</p>
-                    </div>
-                    <div className="bg-slate-50 rounded-xl p-3">
-                      <p className="text-[10px] font-bold text-slate-500 uppercase">Days Remaining</p>
-                      <p className={`text-sm font-extrabold mt-1 ${daysRemaining !== null && daysRemaining <= 10 ? 'text-red-600' : 'text-slate-800'}`}>
-                        {daysRemaining !== null ? `${daysRemaining} days` : '—'}
-                      </p>
+                  <div>
+                    <p className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500 mb-2">Subscription Dates</p>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                      <div className="bg-slate-50 rounded-xl p-3">
+                        <p className="text-[10px] font-bold text-slate-500 uppercase">Start Date</p>
+                        <p className="text-sm font-extrabold text-slate-800 mt-1">{sub.startDate ? new Date(sub.startDate).toLocaleDateString() : '—'}</p>
+                      </div>
+                      <div className="bg-slate-50 rounded-xl p-3">
+                        <p className="text-[10px] font-bold text-slate-500 uppercase">Expiry Date</p>
+                        <p className="text-sm font-extrabold text-slate-800 mt-1">{sub.expiryDate ? new Date(sub.expiryDate).toLocaleDateString() : '—'}</p>
+                      </div>
+                      <div className="bg-slate-50 rounded-xl p-3">
+                        <p className="text-[10px] font-bold text-slate-500 uppercase">Next Renewal</p>
+                        <p className="text-sm font-extrabold text-slate-800 mt-1">{sub.nextRenewalDate ? new Date(sub.nextRenewalDate).toLocaleDateString() : '—'}</p>
+                      </div>
+                      <div className="bg-slate-50 rounded-xl p-3">
+                        <p className="text-[10px] font-bold text-slate-500 uppercase">Days Remaining</p>
+                        <p className={`text-sm font-extrabold mt-1 ${daysRemaining !== null && daysRemaining <= 10 ? 'text-red-600' : 'text-slate-800'}`}>
+                          {daysRemaining !== null ? `${daysRemaining} days` : '—'}
+                        </p>
+                      </div>
                     </div>
                   </div>
 
@@ -264,11 +290,14 @@ export default function RestaurantDetail({ restaurantId, onBack, onPlanChanged }
                     <p className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500 mb-2">Plan Limits</p>
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5">
                       {LIMIT_ITEMS.map((item) => (
-                        <div key={item.key} className="bg-white border border-slate-100 rounded-xl p-2.5">
-                          <p className="text-[9px] font-bold text-slate-400 uppercase">{item.label}</p>
-                          <p className="text-sm font-extrabold text-slate-800 mt-0.5">
-                            {sub[item.key] === null || sub[item.key] === undefined ? 'Unlimited' : sub[item.key]}
-                          </p>
+                        <div key={item.key} className="bg-white border border-slate-100 rounded-xl p-2.5 flex items-center gap-2">
+                          <item.icon className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                          <div>
+                            <p className="text-[9px] font-bold text-slate-400 uppercase">{item.label}</p>
+                            <p className="text-sm font-extrabold text-slate-800 mt-0.5">
+                              {sub[item.key] === null || sub[item.key] === undefined ? 'Unlimited' : sub[item.key]}
+                            </p>
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -321,7 +350,7 @@ export default function RestaurantDetail({ restaurantId, onBack, onPlanChanged }
                     )}
                   </div>
 
-                  {/* Payments — real gateway records (never generated) */}
+                  {/* Payments */}
                   <div>
                     <div className="flex items-center gap-1.5 mb-2 mt-4">
                       <CreditCard className="w-3.5 h-3.5 text-slate-400" />
@@ -358,63 +387,6 @@ export default function RestaurantDetail({ restaurantId, onBack, onPlanChanged }
                 </>
               )}
             </div>
-          )}
-
-          {activeTab === 'users' && (
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="bg-slate-50">
-                    <th className="text-left font-bold text-slate-500 py-2 px-3">Name</th>
-                    <th className="text-left font-bold text-slate-500 py-2 px-3">Email</th>
-                    <th className="text-left font-bold text-slate-500 py-2 px-3">Role</th>
-                    <th className="text-left font-bold text-slate-500 py-2 px-3">Status</th>
-                    <th className="text-left font-bold text-slate-500 py-2 px-3">Last Login</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(restaurant.users || []).map(u => (
-                    <tr key={u.id} className="border-t border-slate-100">
-                      <td className="py-2 px-3 font-semibold text-slate-700">{u.name}</td>
-                      <td className="py-2 px-3 text-slate-500">{u.email}</td>
-                      <td className="py-2 px-3">
-                        <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">{u.role}</span>
-                      </td>
-                      <td className="py-2 px-3">
-                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${u.isActive ? 'bg-green-50 text-green-600' : 'bg-red-50 text-red-600'}`}>
-                          {u.isActive ? 'Active' : 'Inactive'}
-                        </span>
-                      </td>
-                      <td className="py-2 px-3 text-slate-400 text-[10px]">
-                        {u.lastLogin ? new Date(u.lastLogin).toLocaleString() : 'Never'}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-
-          {activeTab === 'orders' && (
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-              {[
-                { label: 'Total Orders', value: restaurant.statistics?.totalOrders || 0 },
-                { label: 'Total Bills', value: restaurant.statistics?.totalBills || 0 },
-                { label: 'Total Customers', value: restaurant.statistics?.totalCustomers || 0 },
-                { label: 'Total Payments', value: restaurant.statistics?.totalPayments || 0 },
-              ].map((s, i) => (
-                <div key={i} className="bg-slate-50 rounded-xl p-3">
-                  <p className="text-[10px] font-bold text-slate-500 uppercase">{s.label}</p>
-                  <p className="text-lg font-extrabold text-slate-800 mt-1">{s.value}</p>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {activeTab === 'activity' && (
-            <p className="text-xs text-slate-400 text-center py-8">
-              Activity log for this restaurant can be viewed in the Audit Logs section.
-            </p>
           )}
         </div>
       </div>

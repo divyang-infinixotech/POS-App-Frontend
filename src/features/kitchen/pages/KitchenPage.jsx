@@ -29,13 +29,6 @@ export default function KitchenPage() {
   }, []);
 
   // ── Real-time updates via WebSocket with polling fallback ──
-  // NOTE: No separate refreshTrigger effect here because:
-  //   - useSocketEvent with pollFn already fetches on mount + polls every 30s
-  //   - Socket events handle real-time updates
-  //   - Adding refreshTrigger would cause duplicate fetches
-  // SINGLE polling interval handles all KOT events.
-  // The useSocket hook deduplicates pollFn calls, so fetchKots
-  // is only called ONCE per interval regardless of event count.
   useSocketEvent({
     event: 'kot:created',
     handler: (data) => {
@@ -57,7 +50,6 @@ export default function KitchenPage() {
       );
       setLoading(false);
     },
-    // No pollFn — covered by the 'kot:created' hook above
   });
 
   useSocketEvent({
@@ -66,27 +58,19 @@ export default function KitchenPage() {
       setKots((prev) => prev.filter((k) => k.id !== data.kot?.id));
       setLoading(false);
     },
-    // No pollFn — covered by the 'kot:created' hook above
   });
 
-  // ── Order-level events (affect ticket visibility) ──
-  // When an order is cancelled, refresh KOTs to remove tickets for that order
   useSocketEvent({
     event: 'order:cancelled',
     handler: () => { fetchKots(); },
-    // No pollFn — covered by the 'kot:created' hook above
   });
-  // When an order is deleted, refresh KOTs
   useSocketEvent({
     event: 'order:deleted',
     handler: () => { fetchKots(); },
-    // No pollFn — covered by the 'kot:created' hook above
   });
-  // When an order is created from another terminal, refresh to show new KOT
   useSocketEvent({
     event: 'order:created',
     handler: () => { fetchKots(); },
-    // No pollFn — covered by the 'kot:created' hook above
   });
 
   // Determine which orders are active vs history based on KOT status
@@ -122,7 +106,7 @@ export default function KitchenPage() {
   const selectedKot = kots.find(k => k.id === selectedKotId) || filteredKots[0] || null;
 
   const handleUpdateKotStatus = async (kotId, newStatus) => {
-    if (busyAction) return; // guard against duplicate requests
+    if (busyAction) return;
     setBusyAction('status');
     try {
       await kotApi.updateStatus(kotId, newStatus);
@@ -135,7 +119,7 @@ export default function KitchenPage() {
   };
 
   const handleVoidKot = async (kotId) => {
-    if (busyAction) return; // guard against duplicate requests
+    if (busyAction) return;
     setBusyAction('void');
     try {
       await kotApi.cancel(kotId, 'Voided from kitchen');
@@ -183,11 +167,11 @@ export default function KitchenPage() {
   }
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 animate-fade-in max-w-7xl mx-auto md:h-[calc(100vh-120px)] md:min-h-[450px]">
+    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 animate-fade-in max-w-7xl mx-auto md:h-[calc(100vh-80px)] md:min-h-0">
       {/* Left Pane: KOT Ticket List */}
-      <div className="md:col-span-1 bg-white rounded-[18px] border border-slate-200 p-3.5 flex flex-col gap-3 md:h-full max-h-[60vh] md:max-h-none shadow-xs">
+      <div className="md:col-span-1 bg-white rounded-[18px] border border-slate-200 p-3.5 flex flex-col gap-3 md:h-full min-h-0 shadow-xs">
         {/* Search */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 shrink-0">
           <div className="relative flex-1">
             <Search className="w-4 h-4 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
             <input
@@ -208,7 +192,7 @@ export default function KitchenPage() {
         </div>
 
         {/* Tabs */}
-        <div className="flex bg-slate-100 p-0.5 rounded-lg border border-slate-200 text-[10px] font-bold">
+        <div className="flex bg-slate-100 p-0.5 rounded-lg border border-slate-200 text-[10px] font-bold shrink-0">
           {['Active', 'On Hold', 'History'].map((tab) => (
             <button
               key={tab}
@@ -224,8 +208,8 @@ export default function KitchenPage() {
           ))}
         </div>
 
-        {/* Ticket list */}
-        <div className="flex-1 overflow-y-auto space-y-1.5 pr-1">
+        {/* Ticket list — independent scroll */}
+        <div className="flex-1 min-h-0 overflow-y-auto space-y-1.5 pr-1">
           {filteredKots.map((kot) => {
             const isSelected = selectedKot?.id === kot.id;
             const itemCount = kot.order?.orderItems?.length || 0;
@@ -273,11 +257,11 @@ export default function KitchenPage() {
         </div>
       </div>
 
-      {/* Right Pane: KOT Detail */}
-      <div className="md:col-span-2 bg-white rounded-[20px] border border-slate-200 p-5 flex flex-col justify-between md:h-full min-h-[320px] shadow-xs">
+      {/* Right Pane: KOT Detail — viewport-bound flex column */}
+      <div className="md:col-span-2 bg-white rounded-[20px] border border-slate-200 p-5 flex flex-col md:h-full min-h-0 shadow-xs">
         {selectedKot ? (
-          <div className="flex flex-col h-full justify-between gap-3.5 overflow-hidden">
-            {/* Header */}
+          <div className="flex flex-col h-full min-h-0">
+            {/* Header — fixed, never scrolls */}
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 pb-3.5 border-b border-slate-100 shrink-0">
               <div className="space-y-0.5">
                 <div className="flex items-center gap-1.5">
@@ -305,8 +289,8 @@ export default function KitchenPage() {
               </div>
             </div>
 
-            {/* Items */}
-            <div className="flex-1 overflow-y-auto space-y-2 pr-1">
+            {/* Items — scrollable content */}
+            <div className="flex-1 min-h-0 overflow-y-auto space-y-2 py-3 pr-1">
               <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">
                 Items to prepare
               </p>
@@ -327,8 +311,8 @@ export default function KitchenPage() {
               ))}
             </div>
 
-            {/* Actions */}
-            <div className="pt-3.5 border-t border-slate-100 shrink-0 space-y-2.5 mt-auto">
+            {/* Actions — fixed bottom bar, never scrolls */}
+            <div className="pt-3.5 border-t border-slate-100 shrink-0 space-y-2.5">
               <div className="flex flex-wrap gap-2 justify-between items-center">
                 <div className="flex gap-2">
                   <button

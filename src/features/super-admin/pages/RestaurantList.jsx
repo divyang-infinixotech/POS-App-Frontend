@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { superAdminApi } from '../../../api/superAdmin.api';
 import ConfirmationDialog from '../../../components/ConfirmationDialog';
 import { useUiStore } from '../../../store';
@@ -15,12 +16,11 @@ import {
   Loader2,
   ChevronLeft,
   ChevronRight,
-  TrendingUp,
-  TrendingDown,
   RotateCcw,
   PlayCircle,
   XCircle,
-  CalendarDays,
+  CreditCard,
+  Building2,
 } from 'lucide-react';
 import RestaurantForm from '../components/RestaurantForm';
 import RestaurantDetail from './RestaurantDetail';
@@ -40,11 +40,11 @@ export default function RestaurantList() {
   const [editRestaurant, setEditRestaurant] = useState(null);
   const [viewDetail, setViewDetail] = useState(null);
   const [actionMenu, setActionMenu] = useState(null);
-  const [planDialog, setPlanDialog] = useState(null); // { restaurant, mode }
-  // Confirm dialog state: { type: 'delete' | 'suspend', restaurant }
+  const [planDialog, setPlanDialog] = useState(null);
   const [confirmAction, setConfirmAction] = useState(null);
   const [busy, setBusy] = useState(false);
   const statusRef = useRef(false);
+
 
   const loadPlans = useCallback(async () => {
     try {
@@ -88,8 +88,97 @@ export default function RestaurantList() {
     return () => clearTimeout(timer);
   }, [search]);
 
+  // Button refs for portal-based dropdown positioning
+  const menuButtonRefs = useRef({});
+  const [menuPosition, setMenuPosition] = useState(null); // { top, left, anchorAbove, restaurant }
+
+  const calcMenuPosition = useCallback((restaurantId) => {
+    const btn = menuButtonRefs.current[restaurantId];
+    if (!btn) return null;
+    const rect = btn.getBoundingClientRect();
+    const menuWidth = 220;
+    const menuHeight = 260; // approximate
+    const gap = 6;
+    const viewportW = window.innerWidth;
+    const viewportH = window.innerHeight;
+
+    // Vertical: prefer below, flip above if not enough space
+    let top;
+    let anchorAbove = false;
+    const spaceBelow = viewportH - rect.bottom;
+    const spaceAbove = rect.top;
+    if (spaceBelow >= menuHeight + gap) {
+      top = rect.bottom + gap;
+    } else if (spaceAbove >= menuHeight + gap) {
+      top = rect.top - gap - menuHeight;
+      anchorAbove = true;
+    } else {
+      // Not enough space either way — prefer below but clamp to viewport
+      top = Math.max(gap, Math.min(rect.bottom + gap, viewportH - menuHeight - gap));
+    }
+
+    // Horizontal: prefer right-aligned to button, clamp inside viewport
+    let left = rect.right - menuWidth;
+    if (left < gap) left = gap;
+    if (left + menuWidth > viewportW - gap) left = viewportW - menuWidth - gap;
+
+    return { top, left, anchorAbove, restaurantId };
+  }, []);
+
+  const openMenu = useCallback((restaurantId) => {
+    setActionMenu(restaurantId);
+    // Position will be calculated on next frame
+    requestAnimationFrame(() => {
+      setMenuPosition(calcMenuPosition(restaurantId));
+    });
+  }, [calcMenuPosition]);
+
+  const closeMenu = useCallback(() => {
+    setActionMenu(null);
+    setMenuPosition(null);
+  }, []);
+
+  // Recalculate position on scroll / resize while menu is open
+  useEffect(() => {
+    if (!actionMenu) return;
+    const reposition = () => setMenuPosition(calcMenuPosition(actionMenu));
+    window.addEventListener('scroll', reposition, true);
+    window.addEventListener('resize', reposition);
+    return () => {
+      window.removeEventListener('scroll', reposition, true);
+      window.removeEventListener('resize', reposition);
+    };
+  }, [actionMenu, calcMenuPosition]);
+
+  // Close on outside click (covers portal-rendered dropdown)
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (!actionMenu) return;
+      // Check if click is inside the portal dropdown
+      const dropdown = document.getElementById('sa-restaurant-action-dropdown');
+      if (dropdown && dropdown.contains(e.target)) return;
+      // Check if click is on the trigger button
+      const btn = menuButtonRefs.current[actionMenu];
+      if (btn && btn.contains(e.target)) return;
+      closeMenu();
+    };
+    if (actionMenu) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [actionMenu, closeMenu]);
+
+  // Close on Escape key
+  useEffect(() => {
+    const handleEsc = (e) => {
+      if (e.key === 'Escape' && actionMenu) closeMenu();
+    };
+    document.addEventListener('keydown', handleEsc);
+    return () => document.removeEventListener('keydown', handleEsc);
+  }, [actionMenu, closeMenu]);
+
   const handleStatusChange = async (id, status) => {
-    if (statusRef.current) return; // double-click guard
+    if (statusRef.current) return;
     statusRef.current = true;
     try {
       await superAdminApi.updateRestaurantStatus(id, status);
@@ -106,7 +195,7 @@ export default function RestaurantList() {
   };
 
   const handleConfirm = async () => {
-    if (!confirmAction || busy) return; // guard against duplicate requests
+    if (!confirmAction || busy) return;
     setBusy(true);
     const { type, restaurant } = confirmAction;
     try {
@@ -190,7 +279,7 @@ export default function RestaurantList() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-extrabold text-slate-800">Restaurant Management</h1>
-          <p className="text-xs text-slate-500 mt-1">Manage all restaurants, subscriptions and plans on the platform</p>
+          <p className="text-xs text-slate-500 mt-1">Manage restaurants and their subscriptions</p>
         </div>
         <button
           onClick={() => { setEditRestaurant(null); setShowForm(true); }}
@@ -236,6 +325,7 @@ export default function RestaurantList() {
         <button
           onClick={() => { loadRestaurants(); loadPlans(); }}
           className="h-9 w-9 flex items-center justify-center bg-white border border-slate-200 rounded-xl hover:bg-slate-50 transition-all cursor-pointer"
+          title="Refresh"
         >
           <RefreshCw className="w-3.5 h-3.5 text-slate-500" />
         </button>
@@ -244,33 +334,33 @@ export default function RestaurantList() {
       {/* Table */}
       <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full text-xs min-w-[1100px]">
+          <table className="w-full text-xs min-w-[1000px]">
             <thead>
               <tr className="bg-slate-50 border-b border-slate-200">
                 <th className="text-left font-extrabold text-slate-600 uppercase tracking-wider py-3 px-4">Restaurant</th>
-                <th className="text-left font-extrabold text-slate-600 uppercase tracking-wider py-3 px-4">Owner</th>
-                <th className="text-left font-extrabold text-slate-600 uppercase tracking-wider py-3 px-4">Contact</th>
+                <th className="text-left font-extrabold text-slate-600 uppercase tracking-wider py-3 px-4">Owner / Contact</th>
                 <th className="text-left font-extrabold text-slate-600 uppercase tracking-wider py-3 px-4">Plan</th>
                 <th className="text-left font-extrabold text-slate-600 uppercase tracking-wider py-3 px-4">Sub. Status</th>
-                <th className="text-left font-extrabold text-slate-600 uppercase tracking-wider py-3 px-4">Start</th>
-                <th className="text-left font-extrabold text-slate-600 uppercase tracking-wider py-3 px-4">Expiry</th>
+                <th className="text-left font-extrabold text-slate-600 uppercase tracking-wider py-3 px-4">Start Date</th>
+                <th className="text-left font-extrabold text-slate-600 uppercase tracking-wider py-3 px-4">End / Renewal</th>
                 <th className="text-left font-extrabold text-slate-600 uppercase tracking-wider py-3 px-4">Days Left</th>
                 <th className="text-left font-extrabold text-slate-600 uppercase tracking-wider py-3 px-4">Status</th>
-                <th className="text-left font-extrabold text-slate-600 uppercase tracking-wider py-3 px-4">Users</th>
                 <th className="text-right font-extrabold text-slate-600 uppercase tracking-wider py-3 px-4">Actions</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={11} className="text-center py-12">
+                  <td colSpan={9} className="text-center py-12">
                     <Loader2 className="w-6 h-6 animate-spin text-[#16A34A] mx-auto" />
                   </td>
                 </tr>
               ) : restaurants.length === 0 ? (
                 <tr>
-                  <td colSpan={11} className="text-center py-12 text-slate-400 font-medium">
-                    No restaurants found
+                  <td colSpan={9} className="text-center py-12">
+                    <Building2 className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+                    <p className="text-sm font-bold text-slate-500">No restaurants found</p>
+                    <p className="text-xs text-slate-400 mt-1">Add your first restaurant to get started</p>
                   </td>
                 </tr>
               ) : (
@@ -288,11 +378,9 @@ export default function RestaurantList() {
                       </div>
                     </td>
                     <td className="py-3 px-4">
-                      <p className="font-semibold text-slate-600">{r.ownerName || '—'}</p>
-                    </td>
-                    <td className="py-3 px-4">
                       <div className="space-y-0.5">
-                        {r.email && <p className="text-slate-500">{r.email}</p>}
+                        <p className="font-semibold text-slate-600">{r.ownerName || '—'}</p>
+                        {r.email && <p className="text-slate-400 text-[10px]">{r.email}</p>}
                         {r.phone && <p className="text-slate-400 text-[10px]">{r.phone}</p>}
                       </div>
                     </td>
@@ -331,55 +419,16 @@ export default function RestaurantList() {
                         {r.status}
                       </span>
                     </td>
-                    <td className="py-3 px-4">
-                      <p className="font-bold text-slate-700">{r.activeUsers}<span className="text-slate-400 font-medium">/{r.totalUsers}</span></p>
-                    </td>
-                    <td className="py-3 px-4 text-right relative">
+                    <td className="py-3 px-4 text-right">
                       <button
-                        onClick={() => setActionMenu(actionMenu === r.id ? null : r.id)}
+                        ref={(el) => { menuButtonRefs.current[r.id] = el; }}
+                        onClick={() => {
+                          if (actionMenu === r.id) { closeMenu(); } else { openMenu(r.id); }
+                        }}
                         className="p-1.5 hover:bg-slate-100 rounded-lg transition-all cursor-pointer"
                       >
                         <MoreVertical className="w-3.5 h-3.5 text-slate-400" />
                       </button>
-                      {actionMenu === r.id && (
-                        <div className="absolute right-4 top-10 bg-white border border-slate-200 rounded-xl shadow-xl z-10 py-1 min-w-[190px]">
-                          <button onClick={() => { setViewDetail(r.id); setActionMenu(null); }} className="w-full flex items-center gap-2 px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50">
-                            <Eye className="w-3.5 h-3.5" /> View
-                          </button>
-                          <button onClick={() => { setEditRestaurant(r); setShowForm(true); setActionMenu(null); }} className="w-full flex items-center gap-2 px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50">
-                            <Edit3 className="w-3.5 h-3.5" /> Edit
-                          </button>
-                          <hr className="my-1 border-slate-100" />
-                          <button onClick={() => { handlePlanAction(r, 'upgrade'); setActionMenu(null); }} className="w-full flex items-center gap-2 px-3 py-2 text-xs font-semibold text-green-600 hover:bg-green-50">
-                            <TrendingUp className="w-3.5 h-3.5" /> Upgrade Plan
-                          </button>
-                          <button onClick={() => { handlePlanAction(r, 'downgrade'); setActionMenu(null); }} className="w-full flex items-center gap-2 px-3 py-2 text-xs font-semibold text-amber-600 hover:bg-amber-50">
-                            <TrendingDown className="w-3.5 h-3.5" /> Downgrade Plan
-                          </button>
-                          <button onClick={() => { handlePlanAction(r, 'renew'); setActionMenu(null); }} className="w-full flex items-center gap-2 px-3 py-2 text-xs font-semibold text-blue-600 hover:bg-blue-50">
-                            <RotateCcw className="w-3.5 h-3.5" /> Renew
-                          </button>
-                          <hr className="my-1 border-slate-100" />
-                          {r.subscriptionStatus === 'SUSPENDED' || r.subscriptionStatus === 'CANCELLED' || r.subscriptionStatus === 'EXPIRED' ? (
-                            <button onClick={() => { handlePlanAction(r, 'activate'); setActionMenu(null); }} className="w-full flex items-center gap-2 px-3 py-2 text-xs font-semibold text-green-600 hover:bg-green-50">
-                              <PlayCircle className="w-3.5 h-3.5" /> Activate
-                            </button>
-                          ) : (
-                            <button onClick={() => { handleSuspend(r); setActionMenu(null); }} className="w-full flex items-center gap-2 px-3 py-2 text-xs font-semibold text-amber-600 hover:bg-amber-50">
-                              <AlertTriangle className="w-3.5 h-3.5" /> Suspend
-                            </button>
-                          )}
-                          {r.subscriptionStatus !== 'CANCELLED' && (
-                            <button onClick={() => { handlePlanAction(r, 'cancel'); setActionMenu(null); }} className="w-full flex items-center gap-2 px-3 py-2 text-xs font-semibold text-red-600 hover:bg-red-50">
-                              <XCircle className="w-3.5 h-3.5" /> Cancel Subscription
-                            </button>
-                          )}
-                          <hr className="my-1 border-slate-100" />
-                          <button onClick={() => { handleDelete(r); setActionMenu(null); }} className="w-full flex items-center gap-2 px-3 py-2 text-xs font-semibold text-red-600 hover:bg-red-50">
-                            <Trash2 className="w-3.5 h-3.5" /> Delete (Soft)
-                          </button>
-                        </div>
-                      )}
                     </td>
                   </tr>
                 ))
@@ -432,6 +481,55 @@ export default function RestaurantList() {
           onClose={() => setPlanDialog(null)}
           onDone={() => { setPlanDialog(null); loadRestaurants(); }}
         />
+      )}
+
+      {/* Portal-rendered action dropdown — escapes table overflow clipping */}
+      {actionMenu && menuPosition && createPortal(
+        <div
+          id="sa-restaurant-action-dropdown"
+          style={{
+            position: 'fixed',
+            top: menuPosition.top,
+            left: menuPosition.left,
+            zIndex: 9999,
+            minWidth: 200,
+          }}
+          className="bg-white border border-slate-200 rounded-xl shadow-2xl py-1 animate-fade-in"
+        >
+          {(() => {
+            const r = restaurants.find((rest) => rest.id === actionMenu);
+            if (!r) return null;
+            return (
+              <>
+                <button onClick={() => { setViewDetail(r.id); closeMenu(); }} className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">
+                  <Eye className="w-3.5 h-3.5" /> View
+                </button>
+                <button onClick={() => { setEditRestaurant(r); setShowForm(true); closeMenu(); }} className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">
+                  <Edit3 className="w-3.5 h-3.5" /> Edit
+                </button>
+                <hr className="my-1 border-slate-100" />
+                <button onClick={() => { handlePlanAction(r, 'upgrade'); closeMenu(); }} className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">
+                  <CreditCard className="w-3.5 h-3.5" /> Manage Subscription
+                </button>
+                <hr className="my-1 border-slate-100" />
+                {r.subscriptionStatus === 'SUSPENDED' || r.subscriptionStatus === 'CANCELLED' || r.subscriptionStatus === 'EXPIRED' ? (
+                  <button onClick={() => { handlePlanAction(r, 'activate'); closeMenu(); }} className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-xs font-semibold text-green-600 hover:bg-green-50">
+                    <PlayCircle className="w-3.5 h-3.5" /> Activate
+                  </button>
+                ) : (
+                  <button onClick={() => { handleSuspend(r); closeMenu(); }} className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-xs font-semibold text-amber-600 hover:bg-amber-50">
+                    <AlertTriangle className="w-3.5 h-3.5" /> Deactivate
+                  </button>
+                )}
+                <hr className="my-1 border-slate-100" />
+                <button onClick={() => { handleDelete(r); closeMenu(); }} className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-xs font-semibold text-red-600 hover:bg-red-50">
+                  <Trash2 className="w-3.5 h-3.5" /> Delete
+                </button>
+              </>
+            );
+          })()}
+        </div>,
+        document.body
       )}
 
       {/* Confirm Delete / Suspend Restaurant */}

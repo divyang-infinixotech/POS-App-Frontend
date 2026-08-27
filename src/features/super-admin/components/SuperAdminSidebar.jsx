@@ -4,7 +4,6 @@ import {
   LayoutDashboard,
   Building2,
   CreditCard,
-  Users,
   Package,
   FileText,
   BarChart3,
@@ -23,7 +22,7 @@ const NAV_ITEMS = [
   { id: 'sa_dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { id: 'sa_restaurants', label: 'Restaurants', icon: Building2 },
   { id: 'sa_subscriptions', label: 'Subscriptions', icon: CreditCard },
-  { id: 'sa_users', label: 'Users', icon: Users },
+
   { id: 'sa_plans', label: 'Plans', icon: Package },
   { id: 'sa_invoices', label: 'Invoices', icon: FileText },
   { id: 'sa_reports', label: 'Platform Reports', icon: BarChart3 },

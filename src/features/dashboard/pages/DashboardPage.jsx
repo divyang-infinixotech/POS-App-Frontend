@@ -463,37 +463,8 @@ export default function DashboardPage() {
           )}
         </div>
 
-        {/* Right: Sales by Hour + Summary */}
+        {/* Right: Summary */}
         <div className="space-y-4">
-          {/* Sales by Hour Chart — responsive, no horizontal overflow */}
-          {data?.salesByHour?.length > 0 && (
-            <div className="bg-white rounded-[18px] border border-slate-200 p-4 shadow-xs overflow-hidden">
-              <h3 className="text-xs font-extrabold text-slate-800 mb-3 uppercase tracking-wider">Sales by Hour</h3>
-              <div className="overflow-hidden">
-                <div className="flex items-end h-28" style={{ gap: '1px' }}>
-                  {data.salesByHour.map((h, idx) => {
-                    const max = Math.max(...data.salesByHour.map(s => Number(s.value) || 0));
-                    const height = max > 0 ? (Number(h.value) / max) * 100 : 0;
-                    const val = Number(h.value) || 0;
-                    const showLabel = idx % 4 === 0; // show every 4th hour label to prevent overlap
-                    return (
-                      <div key={idx} className="flex-1 min-w-0 flex flex-col items-center">
-                        {val > 0 && (
-                          <span className="text-[6px] font-bold text-[#16A34A] leading-none truncate w-full text-center">{formatCurrency(val)}</span>
-                        )}
-                        <div className="w-full bg-gradient-to-t from-[#16A34A]/30 to-[#16A34A]/10 hover:from-[#16A34A]/60 hover:to-[#16A34A]/30 rounded-t transition-all cursor-pointer mt-auto"
-                          style={{ height: `${Math.max(height, 4)}%` }} />
-                        {showLabel && (
-                          <span className="text-[6px] text-slate-400 font-semibold leading-none mt-0.5 truncate w-full text-center">{h.label || h.hour}</span>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            </div>
-          )}
-
           {/* Today's Summary */}
           <div className="bg-white rounded-[18px] border border-slate-200 p-4 shadow-xs">
             <h3 className="text-xs font-extrabold text-slate-800 mb-3 uppercase tracking-wider">Today's Summary</h3>

@@ -607,11 +607,7 @@ export default function SettingsPage() {
               ]} />
               <FormField label="Language" value={settings.language} onChange={(v) => handleFieldChange('language', v)} options={[
                 { value: 'English', label: 'English' },
-                { value: 'Hindi', label: 'Hindi' },
-                { value: 'Gujarati', label: 'Gujarati' },
-                { value: 'Marathi', label: 'Marathi' },
-                { value: 'Tamil', label: 'Tamil' },
-              ]} />
+              ]} disabled />
             </FormGrid>
           </SectionCard>
         );
@@ -800,51 +796,76 @@ export default function SettingsPage() {
   };
 
   return (
-    <div className="space-y-4 animate-fade-in max-w-full pb-3 sm:pb-5">
-      {/* Header with Search */}
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
-        <div>
-          <h3 className="text-lg font-extrabold text-[#191c1e]">POS Settings</h3>
-          <p className="text-[11px] text-slate-500 font-medium">Configure all restaurant, POS, and system preferences</p>
+    <div className="space-y-0 animate-fade-in max-w-full pb-3 sm:pb-5">
+      {/* Sticky Header with Search + Save/Reset */}
+      <div className="sticky top-0 z-30 -mx-3 sm:-mx-5 px-3 sm:px-5 bg-[#F8FAFC]/95 backdrop-blur-md border-b border-slate-200 pt-1 pb-2">
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+          <div>
+            <h3 className="text-lg font-extrabold text-[#191c1e]">POS Settings</h3>
+            <p className="text-[11px] text-slate-500 font-medium">Configure all restaurant, POS, and system preferences</p>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={() => {
+                fetchSettings();
+                addToast('Settings reloaded from database', 'success');
+              }}
+              disabled={loading}
+              className="h-9 px-4 bg-white hover:bg-slate-50 border border-slate-200 disabled:bg-slate-50 disabled:cursor-not-allowed text-slate-500 font-bold rounded-xl text-[10px] uppercase tracking-wider flex items-center gap-1.5 transition-all cursor-pointer"
+              type="button"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+              Reset
+            </button>
+            <button
+              onClick={handleSave}
+              disabled={saving}
+              className="h-9 px-5 bg-[#16A34A] hover:bg-[#15803D] disabled:bg-slate-300 disabled:cursor-not-allowed text-white font-bold rounded-xl text-[10px] uppercase tracking-wider flex items-center gap-1.5 shadow-sm transition-all cursor-pointer"
+              type="button"
+            >
+              {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+              {saving ? 'Saving...' : 'Save Settings'}
+            </button>
+          </div>
+        </div>
+
+        {/* Search Bar */}
+        <div className="relative max-w-xs mt-2">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 pointer-events-none" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search settings..."
+            className="w-full h-8.5 pl-7.5 pr-8 bg-white border border-slate-200 rounded-lg text-xs outline-none focus:border-[#16A34A] transition-all"
+          />
+          {searchQuery && (
+            <button onClick={() => setSearchQuery('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer" type="button">
+              <X className="w-3 h-3" />
+            </button>
+          )}
+        </div>
+
+        {/* Section Tabs */}
+        <div className="flex gap-1 border-b border-slate-200 overflow-x-auto no-scrollbar pb-0.5 mt-2">
+          {filteredSections.map((sec) => (
+            <button
+              key={sec.key}
+              onClick={() => setActiveSection(sec.key)}
+              className={`shrink-0 px-3 py-2 text-[10px] font-bold border-b-2 -mb-px transition-all cursor-pointer flex items-center gap-1.5 whitespace-nowrap ${
+                activeSection === sec.key ? 'border-[#16A34A] text-[#16A34A]' : 'border-transparent text-slate-500 hover:text-slate-800'
+              }`}
+              type="button"
+            >
+              <sec.icon className="w-3.5 h-3.5" />
+              {sec.label}
+            </button>
+          ))}
         </div>
       </div>
 
-      {/* Search Bar */}
-      <div className="relative max-w-xs">
-        <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 pointer-events-none" />
-        <input
-          type="text"
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          placeholder="Search settings..."
-          className="w-full h-8.5 pl-7.5 pr-8 bg-white border border-slate-200 rounded-lg text-xs outline-none focus:border-[#16A34A] transition-all"
-        />
-        {searchQuery && (
-          <button onClick={() => setSearchQuery('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer" type="button">
-            <X className="w-3 h-3" />
-          </button>
-        )}
-      </div>
-
-      {/* Section Tabs */}
-      <div className="flex gap-1 border-b border-slate-200 overflow-x-auto no-scrollbar pb-0.5">
-        {filteredSections.map((sec) => (
-          <button
-            key={sec.key}
-            onClick={() => setActiveSection(sec.key)}
-            className={`shrink-0 px-3 py-2 text-[10px] font-bold border-b-2 -mb-px transition-all cursor-pointer flex items-center gap-1.5 whitespace-nowrap ${
-              activeSection === sec.key ? 'border-[#16A34A] text-[#16A34A]' : 'border-transparent text-slate-500 hover:text-slate-800'
-            }`}
-            type="button"
-          >
-            <sec.icon className="w-3.5 h-3.5" />
-            {sec.label}
-          </button>
-        ))}
-      </div>
-
       {/* Section Content */}
-      <div className="min-h-[300px]">
+      <div className="min-h-[300px] pt-4">
         {renderSection()}
       </div>
 
@@ -858,45 +879,6 @@ export default function SettingsPage() {
           </button>
         </div>
       )}
-
-      {/* Sticky Save Bar — sticky INSIDE the scrollable main (which starts
-          after the sidebar), never fixed to the full viewport. Negative
-          horizontal margins counteract main's p-3/p-5 padding so the bar
-          stays flush with the content column edges and can never cover the
-          sidebar (no negative bottom margin — that would clip the bar when
-          stuck). */}
-      <div className="sticky bottom-0 -mx-3 sm:-mx-5 bg-white/90 backdrop-blur-md border-t border-slate-200 px-5 py-3 z-40 shadow-[0_-4px_20px_rgba(0,0,0,0.08)]">
-        <div className="max-w-7xl mx-auto flex items-center justify-between">
-          <div className="text-[10px] text-slate-400 font-medium">
-            {activeSection && (
-              <span>Editing: <span className="font-bold text-slate-600">{SECTIONS.find(s => s.key === activeSection)?.label}</span></span>
-            )}
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => {
-                fetchSettings();
-                addToast('Settings reloaded from database', 'success');
-              }}
-              disabled={loading}
-              className="h-8.5 px-4 bg-white hover:bg-slate-50 border border-slate-200 disabled:bg-slate-50 disabled:cursor-not-allowed text-slate-500 font-bold rounded-xl text-[10px] uppercase tracking-wider flex items-center gap-1.5 transition-all cursor-pointer"
-              type="button"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
-              Reset
-            </button>
-            <button
-              onClick={handleSave}
-              disabled={saving}
-              className="h-8.5 px-5 bg-[#16A34A] hover:bg-[#15803D] disabled:bg-slate-300 disabled:cursor-not-allowed text-white font-bold rounded-xl text-[10px] uppercase tracking-wider flex items-center gap-1.5 shadow-sm transition-all cursor-pointer"
-              type="button"
-            >
-              {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
-              {saving ? 'Saving...' : 'Save Settings'}
-            </button>
-          </div>
-        </div>
-      </div>
 
       {/* Add Printer Modal */}
       {showPrinterModal && (

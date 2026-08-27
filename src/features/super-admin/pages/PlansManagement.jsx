@@ -6,25 +6,18 @@ import {
   Package, Plus, Pencil, Trash2, Power, Loader2, RefreshCw, Copy, Search,
   Users, Monitor, Utensils, Printer, HardDrive, Building2, CreditCard,
   CheckCircle2, XCircle, X, Save, Layers, ShoppingCart, Globe, Cpu, Network,
-  LayoutDashboard, Receipt, Clock, FileSpreadsheet, Settings as SettingsIcon,
-  QrCode, Code2, ChevronUp, ChevronDown, Table as TableIcon, ArrowUpDown,
+  Settings as SettingsIcon, ChevronUp, ChevronDown, ArrowUpDown, Sparkles,
 } from 'lucide-react';
 
-// Feature key → icon for the plan editor / cards (fallback if catalog icon is unknown)
+// Feature key → icon for display
 const FEATURE_ICONS = {
-  dashboard: LayoutDashboard, pos: ShoppingCart, menu: Utensils, billing: CreditCard,
-  tables: Layers, active_orders: Clock, kitchen: Utensils, staff: Users, customers: Users,
+  dashboard: Layers, pos: ShoppingCart, menu: Utensils, billing: CreditCard,
+  tables: Layers, active_orders: Layers, kitchen: Utensils, staff: Users, customers: Users,
   reports: Cpu, floors: Layers, inventory: Package, printers: Printer,
-  analytics: Cpu, online_ordering: Globe, multi_branch: Network, settings: SettingsIcon,
-  qr_ordering: QrCode, api_access: Code2, multi_terminal: Monitor,
+  settings: SettingsIcon,
 };
 
-// The ONLY restaurant modules that exist in the app (mirrors the backend
-// AVAILABLE_RESTAURANT_MODULES allowlist — the backend remains authoritative;
-// this list is used only for the static FEATURE_LABELS fallback when the
-// module-catalog API is unreachable). Modules without a real restaurant
-// feature (qr_ordering, api_access, multi_terminal, inventory, printers) and
-// Super Admin platform screens are never offered on a plan.
+// The ONLY restaurant modules that exist in the app
 const AVAILABLE_RESTAURANT_MODULE_KEYS = [
   'dashboard', 'pos', 'billing', 'floors', 'tables', 'kitchen',
   'active_orders', 'menu', 'customers', 'staff', 'reports', 'settings',
@@ -46,28 +39,24 @@ const EMPTY_PLAN = {
   billingCycle: 'MONTHLY', trialDays: 0,
   maxUsers: '', maxTables: '', maxFloors: '', maxMenuItems: '', maxPrinters: '',
   maxBranches: '', maxOrdersPerMonth: '', storageLimitMB: '',
-  enabledKeys: [], isActive: true, isDefault: false, sortOrder: 0,
+  isActive: true, isDefault: false, sortOrder: 0,
 };
 
-const PlanFormModal = ({ plan, modules, onClose, onSaved }) => {
+const PlanFormModal = ({ plan, onClose, onSaved }) => {
   const isEdit = !!plan?.id;
-  const catalog = useMemo(() => {
-    if (modules && modules.length > 0) {
-      // Backend flags real restaurant modules with available:true — only those
-      // are renderable as plan toggles (no fake/future/SA modules).
-      return modules.filter((m) => m.available !== false);
+
+  // Determine included features — for new plans all modules are included by default;
+  // for existing plans use the stored features list.
+  const includedFeatures = useMemo(() => {
+    if (isEdit && Array.isArray(plan.features) && plan.features.length > 0) {
+      return plan.features;
     }
-    // Fallback: static labels if the catalog API is unavailable
-    return Object.entries(FEATURE_LABELS)
-      .filter(([key]) => AVAILABLE_RESTAURANT_MODULE_KEYS.includes(key))
-      .map(([key, name], i) => ({ key, name, icon: 'package', sortOrder: i }));
-  }, [modules]);
+    // New plan: all available modules included by default
+    return [...AVAILABLE_RESTAURANT_MODULE_KEYS];
+  }, [plan, isEdit]);
 
   const [form, setForm] = useState(() => {
     if (!plan) return { ...EMPTY_PLAN };
-    const enabledKeys = Array.isArray(plan.modules) && plan.modules.length > 0
-      ? plan.modules.filter((m) => m.enabled).map((m) => m.moduleKey)
-      : (Array.isArray(plan.features) ? plan.features : []);
     return {
       code: plan.code || '', name: plan.name || '', description: plan.description || '',
       monthlyPrice: plan.monthlyPrice ?? 0, yearlyPrice: plan.yearlyPrice ?? 0,
@@ -76,7 +65,6 @@ const PlanFormModal = ({ plan, modules, onClose, onSaved }) => {
       maxMenuItems: plan.maxMenuItems ?? '', maxPrinters: plan.maxPrinters ?? '',
       maxBranches: plan.maxBranches ?? '', maxOrdersPerMonth: plan.maxOrdersPerMonth ?? '',
       storageLimitMB: plan.storageLimitMB ?? '',
-      enabledKeys,
       isActive: plan.isActive !== false, isDefault: !!plan.isDefault, sortOrder: plan.sortOrder ?? 0,
     };
   });
@@ -84,13 +72,6 @@ const PlanFormModal = ({ plan, modules, onClose, onSaved }) => {
   const [error, setError] = useState('');
 
   const set = (key, val) => setForm((f) => ({ ...f, [key]: val }));
-
-  const toggleModule = (key) => {
-    setForm((f) => ({
-      ...f,
-      enabledKeys: f.enabledKeys.includes(key) ? f.enabledKeys.filter((x) => x !== key) : [...f.enabledKeys, key],
-    }));
-  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -110,8 +91,10 @@ const PlanFormModal = ({ plan, modules, onClose, onSaved }) => {
         maxBranches: form.maxBranches === '' ? null : Number(form.maxBranches),
         maxOrdersPerMonth: form.maxOrdersPerMonth === '' ? null : Number(form.maxOrdersPerMonth),
         storageLimitMB: form.storageLimitMB === '' ? null : Number(form.storageLimitMB),
-        // Relational module permissions — stored in PlanModulePermission
-        modules: catalog.map((m) => ({ moduleKey: m.key, enabled: form.enabledKeys.includes(m.key) })),
+        // All available modules are included in the plan entitlements.
+        // Backend syncs PlanModulePermission and Plan.features from this.
+        modules: AVAILABLE_RESTAURANT_MODULE_KEYS.map((key) => ({ moduleKey: key, enabled: true })),
+        features: [...AVAILABLE_RESTAURANT_MODULE_KEYS],
         isActive: form.isActive, isDefault: form.isDefault,
         sortOrder: Number(form.sortOrder || 0),
       };
@@ -134,64 +117,75 @@ const PlanFormModal = ({ plan, modules, onClose, onSaved }) => {
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
           <div>
             <h3 className="text-sm font-extrabold text-slate-800">{isEdit ? 'Edit Plan' : 'Create New Plan'}</h3>
-            <p className="text-[10px] text-slate-400 mt-0.5">Plans are stored in the database and applied instantly to all restaurants.</p>
+            <p className="text-[10px] text-slate-400 mt-0.5">Define pricing, limits, and entitlements for this subscription tier.</p>
           </div>
           <button onClick={onClose} className="p-1.5 hover:bg-slate-100 rounded-lg text-slate-400 cursor-pointer"><X className="w-4 h-4" /></button>
         </div>
 
-        <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto px-5 py-4 space-y-4 no-scrollbar">
+        <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto px-5 py-4 space-y-5 no-scrollbar">
           {error && <div className="p-2.5 bg-red-50 border border-red-200 rounded-lg text-[11px] font-bold text-red-600">{error}</div>}
 
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <div>
-              <label className={labelCls}>Plan Code *</label>
-              <input value={form.code} onChange={(e) => set('code', e.target.value.toUpperCase())} placeholder="e.g. GOLD" className={inputCls} disabled={isEdit} />
+          {/* Basic Information */}
+          <div>
+            <p className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500 mb-3">Basic Information</p>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <div>
+                <label className={labelCls}>Plan Code *</label>
+                <input value={form.code} onChange={(e) => set('code', e.target.value.toUpperCase())} placeholder="e.g. GOLD" className={inputCls} disabled={isEdit} />
+              </div>
+              <div>
+                <label className={labelCls}>Plan Name *</label>
+                <input value={form.name} onChange={(e) => set('name', e.target.value)} placeholder="e.g. Gold" className={inputCls} />
+              </div>
+              <div>
+                <label className={labelCls}>Billing Cycle</label>
+                <select value={form.billingCycle} onChange={(e) => set('billingCycle', e.target.value)} className={inputCls}>
+                  <option value="MONTHLY">Monthly</option>
+                  <option value="YEARLY">Yearly</option>
+                  <option value="ONCE">One Time</option>
+                </select>
+              </div>
+              <div>
+                <label className={labelCls}>Trial Days</label>
+                <input type="number" min="0" value={form.trialDays} onChange={(e) => set('trialDays', e.target.value)} className={inputCls} />
+              </div>
             </div>
-            <div>
-              <label className={labelCls}>Plan Name *</label>
-              <input value={form.name} onChange={(e) => set('name', e.target.value)} placeholder="e.g. Gold" className={inputCls} />
-            </div>
-            <div>
-              <label className={labelCls}>Billing Cycle</label>
-              <select value={form.billingCycle} onChange={(e) => set('billingCycle', e.target.value)} className={inputCls}>
-                <option value="MONTHLY">Monthly</option>
-                <option value="YEARLY">Yearly</option>
-                <option value="ONCE">One Time</option>
-              </select>
-            </div>
-            <div>
-              <label className={labelCls}>Trial Days</label>
-              <input type="number" min="0" value={form.trialDays} onChange={(e) => set('trialDays', e.target.value)} className={inputCls} />
-            </div>
-            <div>
-              <label className={labelCls}>Monthly Price (₹)</label>
-              <input type="number" min="0" step="0.01" value={form.monthlyPrice} onChange={(e) => set('monthlyPrice', e.target.value)} className={inputCls} />
-            </div>
-            <div>
-              <label className={labelCls}>Yearly Price (₹)</label>
-              <input type="number" min="0" step="0.01" value={form.yearlyPrice} onChange={(e) => set('yearlyPrice', e.target.value)} className={inputCls} />
-            </div>
-            <div>
-              <label className={labelCls}>Sort Order</label>
-              <input type="number" value={form.sortOrder} onChange={(e) => set('sortOrder', e.target.value)} className={inputCls} />
-            </div>
-            <div>
-              <label className={labelCls}>Status</label>
-              <select value={form.isActive ? '1' : '0'} onChange={(e) => set('isActive', e.target.value === '1')} className={inputCls}>
-                <option value="1">Active</option>
-                <option value="0">Inactive</option>
-              </select>
+            <div className="mt-3">
+              <label className={labelCls}>Description</label>
+              <textarea value={form.description} onChange={(e) => set('description', e.target.value)} rows={2} className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold outline-none focus:border-[#16A34A] resize-none" placeholder="Brief description of this plan..." />
             </div>
           </div>
 
+          {/* Pricing */}
           <div>
-            <label className={labelCls}>Description</label>
-            <textarea value={form.description} onChange={(e) => set('description', e.target.value)} rows={2} className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold outline-none focus:border-[#16A34A] resize-none" />
+            <p className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500 mb-3">Pricing</p>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <div>
+                <label className={labelCls}>Monthly Price (₹)</label>
+                <input type="number" min="0" step="0.01" value={form.monthlyPrice} onChange={(e) => set('monthlyPrice', e.target.value)} className={inputCls} />
+              </div>
+              <div>
+                <label className={labelCls}>Yearly Price (₹)</label>
+                <input type="number" min="0" step="0.01" value={form.yearlyPrice} onChange={(e) => set('yearlyPrice', e.target.value)} className={inputCls} />
+              </div>
+              <div>
+                <label className={labelCls}>Sort Order</label>
+                <input type="number" value={form.sortOrder} onChange={(e) => set('sortOrder', e.target.value)} className={inputCls} />
+              </div>
+              <div>
+                <label className={labelCls}>Status</label>
+                <select value={form.isActive ? '1' : '0'} onChange={(e) => set('isActive', e.target.value === '1')} className={inputCls}>
+                  <option value="1">Active</option>
+                  <option value="0">Inactive</option>
+                </select>
+              </div>
+            </div>
           </div>
 
-          {/* Limits */}
+          {/* Subscription Limits */}
           <div>
-            <p className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500 mb-2">Usage Limits (leave empty for unlimited)</p>
+            <p className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500 mb-3">Subscription Limits</p>
+            <p className="text-[10px] text-slate-400 mb-2">Leave empty for unlimited. These limits are enforced per restaurant.</p>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
               {LIMIT_FIELDS.map((f) => (
                 <div key={f.key}>
@@ -205,29 +199,26 @@ const PlanFormModal = ({ plan, modules, onClose, onSaved }) => {
             </div>
           </div>
 
-          {/* Module Access — toggles rendered from the database module catalog */}
+          {/* Plan Entitlements — read-only feature summary */}
           <div>
-            <p className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500 mb-2">Module Access</p>
-            <p className="text-[10px] text-slate-400 mb-2">Modules not included are hidden from the restaurant UI and blocked at the API level. Toggling a module here updates every restaurant on this plan immediately.</p>
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
-              {catalog.map((m) => {
-                const Icon = FEATURE_ICONS[m.key] || Package;
-                const on = form.enabledKeys.includes(m.key);
-                return (
-                  <button
-                    type="button"
-                    key={m.key}
-                    onClick={() => toggleModule(m.key)}
-                    className={`flex items-center gap-2 px-3 py-2 rounded-xl border text-[11px] font-bold transition-all cursor-pointer ${
-                      on ? 'border-[#16A34A] bg-[#16A34A]/5 text-[#16A34A]' : 'border-slate-200 text-slate-500 hover:bg-slate-50'
-                    }`}
-                  >
-                    {on ? <CheckCircle2 className="w-3.5 h-3.5 shrink-0" /> : <XCircle className="w-3.5 h-3.5 shrink-0 text-slate-300" />}
-                    <Icon className="w-3.5 h-3.5 shrink-0" />
-                    <span className="truncate">{m.name}</span>
-                  </button>
-                );
-              })}
+            <div className="flex items-center gap-2 mb-3">
+              <Sparkles className="w-3.5 h-3.5 text-[#16A34A]" />
+              <p className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500">Plan Entitlements</p>
+            </div>
+            <p className="text-[10px] text-slate-400 mb-3">This plan includes access to all platform modules. Restaurants subscribed to this plan receive full functionality.</p>
+            <div className="bg-slate-50 rounded-xl p-4 border border-slate-100">
+              <div className="flex flex-wrap gap-1.5">
+                {includedFeatures.map((key) => {
+                  const Icon = FEATURE_ICONS[key] || Package;
+                  const label = FEATURE_LABELS[key] || key;
+                  return (
+                    <span key={key} className="inline-flex items-center gap-1.5 text-[10px] font-bold px-2.5 py-1.5 rounded-lg bg-[#16A34A]/10 text-[#16A34A] border border-[#16A34A]/20">
+                      <Icon className="w-3 h-3" />
+                      {label}
+                    </span>
+                  );
+                })}
+              </div>
             </div>
           </div>
 
@@ -271,16 +262,14 @@ const SORT_OPTIONS = [
 
 export default function PlansManagement() {
   const [plans, setPlans] = useState([]);
-  const [modules, setModules] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [modal, setModal] = useState(null); // { plan } | null
-  const [view, setView] = useState('cards'); // 'cards' | 'table'
+  const [modal, setModal] = useState(null);
+  const [view, setView] = useState('cards');
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [sortBy, setSortBy] = useState('sortOrder');
   const [sortDir, setSortDir] = useState('asc');
   const [toast, setToast] = useState('');
-  // Confirm dialog state: { type: 'duplicate' | 'delete', plan }
   const [confirm, setConfirm] = useState(null);
   const [busy, setBusy] = useState(false);
 
@@ -292,12 +281,8 @@ export default function PlansManagement() {
   const load = useCallback(async () => {
     try {
       setLoading(true);
-      const [plansResp, modulesResp] = await Promise.all([
-        superAdminApi.getPlans(),
-        superAdminApi.getPlanModules(),
-      ]);
+      const plansResp = await superAdminApi.getPlans();
       if (plansResp.success) setPlans(plansResp.data || []);
-      if (modulesResp.success) setModules(modulesResp.data || []);
     } catch (e) {
       console.error('Failed to load plans:', e);
     } finally {
@@ -331,7 +316,7 @@ export default function PlansManagement() {
   };
 
   const handleConfirm = async () => {
-    if (!confirm || busy) return; // guard against duplicate requests
+    if (!confirm || busy) return;
     setBusy(true);
     const { type, plan } = confirm;
     try {
@@ -351,12 +336,6 @@ export default function PlansManagement() {
       setBusy(false);
     }
   };
-
-  // Only modules flagged available by the backend count toward the module total
-  const availableModuleCount = useMemo(
-    () => (modules.length > 0 ? modules.filter((m) => m.available !== false).length : AVAILABLE_RESTAURANT_MODULE_KEYS.length),
-    [modules]
-  );
 
   const filteredPlans = useMemo(() => {
     let list = [...plans];
@@ -401,7 +380,7 @@ export default function PlansManagement() {
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-xl font-extrabold text-slate-800">Subscription Plans</h1>
-          <p className="text-xs text-slate-500 mt-1">Fully database-driven — changes apply instantly to every assigned restaurant, no restart needed.</p>
+          <p className="text-xs text-slate-500 mt-1">Fully database-driven — changes apply instantly to every assigned restaurant.</p>
         </div>
         <div className="flex gap-2">
           <button onClick={load} className="h-9 w-9 flex items-center justify-center bg-white border border-slate-200 rounded-xl hover:bg-slate-50 cursor-pointer" title="Refresh">
@@ -413,7 +392,7 @@ export default function PlansManagement() {
         </div>
       </div>
 
-      {/* Toolbar: search / filter / sort / view toggle */}
+      {/* Toolbar */}
       <div className="bg-white border border-slate-200 rounded-xl px-3 py-2.5 flex flex-wrap items-center gap-2">
         <div className="relative flex-1 min-w-[200px]">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
@@ -461,149 +440,142 @@ export default function PlansManagement() {
           <p className="text-xs font-bold text-slate-500">No plans match your search</p>
         </div>
       ) : view === 'cards' ? (
-        <>
-          {/* Plan Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
-            {filteredPlans.map((plan, i) => {
-              const c = COLOR_MAP[PLAN_COLORS[i % PLAN_COLORS.length]];
-              const price = plan.billingCycle === 'YEARLY' ? plan.yearlyPrice : plan.monthlyPrice;
-              const priceLabel = plan.billingCycle === 'YEARLY' ? `${fmtPrice(price)}/yr` : `${fmtPrice(price)}/mo`;
-              const featureCount = Array.isArray(plan.features) ? plan.features.length : 0;
-              const inUse = Number(plan.restaurantCount || 0);
-              return (
-                <div key={plan.id} className={`relative bg-white border-2 ${c.border} rounded-2xl p-5 flex flex-col transition-all hover:shadow-lg`}>
-                  <div className="absolute top-3 right-3 flex items-center gap-1">
-                    {plan.isDefault && (
-                      <span className="text-[8px] font-bold px-1.5 py-0.5 rounded-full bg-slate-900 text-white uppercase tracking-wider">Default</span>
-                    )}
-                    {!plan.isActive && (
-                      <span className="text-[8px] font-bold px-1.5 py-0.5 rounded-full bg-red-50 text-red-500 uppercase tracking-wider">Inactive</span>
-                    )}
-                  </div>
-                  <div className={`w-10 h-10 rounded-xl ${c.bg} ${c.text} flex items-center justify-center mb-3`}>
-                    <Package className="w-5 h-5" />
-                  </div>
-                  <h3 className="text-base font-extrabold text-slate-800">{plan.name}</h3>
-                  <p className="text-[10px] text-slate-400 mt-0.5 line-clamp-2">{plan.description || '—'}</p>
-                  <div className="mt-2 flex items-baseline gap-1">
-                    <span className="text-xl font-extrabold text-slate-900">{priceLabel}</span>
-                  </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
+          {filteredPlans.map((plan, i) => {
+            const c = COLOR_MAP[PLAN_COLORS[i % PLAN_COLORS.length]];
+            const price = plan.billingCycle === 'YEARLY' ? plan.yearlyPrice : plan.monthlyPrice;
+            const priceLabel = plan.billingCycle === 'YEARLY' ? `${fmtPrice(price)}/yr` : `${fmtPrice(price)}/mo`;
+            const featureCount = Array.isArray(plan.features) ? plan.features.length : 0;
+            const inUse = Number(plan.restaurantCount || 0);
+            return (
+              <div key={plan.id} className={`relative bg-white border-2 ${c.border} rounded-2xl p-5 flex flex-col transition-all hover:shadow-lg`}>
+                <div className="absolute top-3 right-3 flex items-center gap-1">
+                  {plan.isDefault && (
+                    <span className="text-[8px] font-bold px-1.5 py-0.5 rounded-full bg-slate-900 text-white uppercase tracking-wider">Default</span>
+                  )}
+                  {!plan.isActive && (
+                    <span className="text-[8px] font-bold px-1.5 py-0.5 rounded-full bg-red-50 text-red-500 uppercase tracking-wider">Inactive</span>
+                  )}
+                </div>
+                <div className={`w-10 h-10 rounded-xl ${c.bg} ${c.text} flex items-center justify-center mb-3`}>
+                  <Package className="w-5 h-5" />
+                </div>
+                <h3 className="text-base font-extrabold text-slate-800">{plan.name}</h3>
+                <p className="text-[10px] text-slate-400 mt-0.5 line-clamp-2">{plan.description || '—'}</p>
+                <div className="mt-2 flex items-baseline gap-1">
+                  <span className="text-xl font-extrabold text-slate-900">{priceLabel}</span>
+                </div>
 
-                  <div className="mt-3 space-y-1.5 flex-1">
-                    {LIMIT_FIELDS.slice(0, 4).map((f) => (
-                      <div key={f.key} className="flex items-center justify-between text-[10px]">
-                        <span className="font-semibold text-slate-400 flex items-center gap-1.5"><f.icon className="w-3 h-3" />{f.label}</span>
-                        <span className="font-extrabold text-slate-600">{formatLimit(plan[f.key])}</span>
-                      </div>
-                    ))}
-                    <div className="flex items-center justify-between text-[10px] pt-1 border-t border-slate-50">
-                      <span className="font-semibold text-slate-400">Modules</span>
-                      <span className="font-extrabold text-slate-600">{featureCount} / {availableModuleCount}</span>
+                <div className="mt-3 space-y-1.5 flex-1">
+                  {LIMIT_FIELDS.slice(0, 4).map((f) => (
+                    <div key={f.key} className="flex items-center justify-between text-[10px]">
+                      <span className="font-semibold text-slate-400 flex items-center gap-1.5"><f.icon className="w-3 h-3" />{f.label}</span>
+                      <span className="font-extrabold text-slate-600">{formatLimit(plan[f.key])}</span>
                     </div>
-                    <div className="flex items-center justify-between text-[10px]">
-                      <span className="font-semibold text-slate-400 flex items-center gap-1.5"><Users className="w-3 h-3" />Restaurants</span>
-                      <span className={`font-extrabold ${inUse > 0 ? 'text-[#16A34A]' : 'text-slate-400'}`}>{inUse}</span>
-                    </div>
+                  ))}
+                  <div className="flex items-center justify-between text-[10px] pt-1 border-t border-slate-50">
+                    <span className="font-semibold text-slate-400">Modules</span>
+                    <span className="font-extrabold text-slate-600">{featureCount} / {AVAILABLE_RESTAURANT_MODULE_KEYS.length}</span>
                   </div>
-
-                  <div className="mt-4 pt-3 border-t border-slate-100 flex gap-1.5">
-                    <button onClick={() => setModal({ plan })} className="flex-1 h-7 flex items-center justify-center gap-1 bg-white hover:bg-slate-50 border border-slate-200 rounded-lg text-[10px] font-bold text-slate-600 cursor-pointer">
-                      <Pencil className="w-3 h-3" /> Edit
-                    </button>
-                    <button onClick={() => handleDuplicate(plan)} title="Duplicate Plan" className="w-7 h-7 flex items-center justify-center bg-cyan-50 text-cyan-600 rounded-lg hover:bg-cyan-100 cursor-pointer">
-                      <Copy className="w-3 h-3" />
-                    </button>
-                    <button onClick={() => handleToggle(plan)} title={plan.isActive ? 'Deactivate' : 'Activate'} className={`w-7 h-7 flex items-center justify-center rounded-lg cursor-pointer ${plan.isActive ? 'bg-amber-50 text-amber-600 hover:bg-amber-100' : 'bg-green-50 text-green-600 hover:bg-green-100'}`}>
-                      <Power className="w-3 h-3" />
-                    </button>
-                    <button onClick={() => handleDelete(plan)} title={inUse > 0 ? 'Assigned — cannot delete' : 'Delete'} className={`w-7 h-7 flex items-center justify-center rounded-lg cursor-pointer ${inUse > 0 ? 'bg-slate-100 text-slate-400' : 'bg-red-50 text-red-500 hover:bg-red-100'}`}>
-                      <Trash2 className="w-3 h-3" />
-                    </button>
+                  <div className="flex items-center justify-between text-[10px]">
+                    <span className="font-semibold text-slate-400 flex items-center gap-1.5"><Users className="w-3 h-3" />Restaurants</span>
+                    <span className={`font-extrabold ${inUse > 0 ? 'text-[#16A34A]' : 'text-slate-400'}`}>{inUse}</span>
                   </div>
                 </div>
-              );
-            })}
-          </div>
-        </>
+
+                <div className="mt-4 pt-3 border-t border-slate-100 flex gap-1.5">
+                  <button onClick={() => setModal({ plan })} className="flex-1 h-7 flex items-center justify-center gap-1 bg-white hover:bg-slate-50 border border-slate-200 rounded-lg text-[10px] font-bold text-slate-600 cursor-pointer">
+                    <Pencil className="w-3 h-3" /> Edit
+                  </button>
+                  <button onClick={() => handleDuplicate(plan)} title="Duplicate Plan" className="w-7 h-7 flex items-center justify-center bg-cyan-50 text-cyan-600 rounded-lg hover:bg-cyan-100 cursor-pointer">
+                    <Copy className="w-3 h-3" />
+                  </button>
+                  <button onClick={() => handleToggle(plan)} title={plan.isActive ? 'Deactivate' : 'Activate'} className={`w-7 h-7 flex items-center justify-center rounded-lg cursor-pointer ${plan.isActive ? 'bg-amber-50 text-amber-600 hover:bg-amber-100' : 'bg-green-50 text-green-600 hover:bg-green-100'}`}>
+                    <Power className="w-3 h-3" />
+                  </button>
+                  <button onClick={() => handleDelete(plan)} title={inUse > 0 ? 'Assigned — cannot delete' : 'Delete'} className={`w-7 h-7 flex items-center justify-center rounded-lg cursor-pointer ${inUse > 0 ? 'bg-slate-100 text-slate-400' : 'bg-red-50 text-red-500 hover:bg-red-100'}`}>
+                    <Trash2 className="w-3 h-3" />
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
       ) : (
-        <>
-          {/* Plan Table */}
-          <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="bg-slate-50 border-b border-slate-100">
-                    <th className="text-left font-extrabold text-slate-500 py-3 px-4 cursor-pointer select-none hover:text-[#16A34A]" onClick={() => toggleSort('name')}>
-                      Plan Name <SortIndicator col="name" />
-                    </th>
-                    <th className="text-left font-extrabold text-slate-500 py-3 px-4 cursor-pointer select-none hover:text-[#16A34A]" onClick={() => toggleSort('monthlyPrice')}>
-                      Monthly <SortIndicator col="monthlyPrice" />
-                    </th>
-                    <th className="text-left font-extrabold text-slate-500 py-3 px-4 cursor-pointer select-none hover:text-[#16A34A]" onClick={() => toggleSort('yearlyPrice')}>
-                      Yearly <SortIndicator col="yearlyPrice" />
-                    </th>
-                    <th className="text-center font-extrabold text-slate-500 py-3 px-4">Restaurants</th>
-                    <th className="text-left font-extrabold text-slate-500 py-3 px-4">Status</th>
-                    <th className="text-left font-extrabold text-slate-500 py-3 px-4 cursor-pointer select-none hover:text-[#16A34A]" onClick={() => toggleSort('createdAt')}>
-                      Created <SortIndicator col="createdAt" />
-                    </th>
-                    <th className="text-right font-extrabold text-slate-500 py-3 px-4">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredPlans.map((plan) => {
-                    const inUse = Number(plan.restaurantCount || 0);
-                    return (
-                      <tr key={plan.id} className="border-t border-slate-50 hover:bg-slate-50/60 transition-colors">
-                        <td className="py-3 px-4">
-                          <div className="flex items-center gap-2.5">
-                            <div className={`w-8 h-8 rounded-lg ${COLOR_MAP[PLAN_COLORS[plans.indexOf(plan) % PLAN_COLORS.length]].bg} ${COLOR_MAP[PLAN_COLORS[plans.indexOf(plan) % PLAN_COLORS.length]].text} flex items-center justify-center`}>
-                              <Package className="w-4 h-4" />
-                            </div>
-                            <div>
-                              <div className="font-extrabold text-slate-700 flex items-center gap-1.5">
-                                {plan.name}
-                                {plan.isDefault && <span className="text-[8px] font-bold px-1.5 py-0.5 rounded-full bg-slate-900 text-white uppercase tracking-wider">Default</span>}
-                              </div>
-                              <div className="text-[10px] text-slate-400 font-semibold">{plan.code}</div>
-                            </div>
+        <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="bg-slate-50 border-b border-slate-100">
+                  <th className="text-left font-extrabold text-slate-500 py-3 px-4 cursor-pointer select-none hover:text-[#16A34A]" onClick={() => toggleSort('name')}>
+                    Plan Name <SortIndicator col="name" />
+                  </th>
+                  <th className="text-left font-extrabold text-slate-500 py-3 px-4 cursor-pointer select-none hover:text-[#16A34A]" onClick={() => toggleSort('monthlyPrice')}>
+                    Monthly <SortIndicator col="monthlyPrice" />
+                  </th>
+                  <th className="text-left font-extrabold text-slate-500 py-3 px-4 cursor-pointer select-none hover:text-[#16A34A]" onClick={() => toggleSort('yearlyPrice')}>
+                    Yearly <SortIndicator col="yearlyPrice" />
+                  </th>
+                  <th className="text-center font-extrabold text-slate-500 py-3 px-4">Restaurants</th>
+                  <th className="text-left font-extrabold text-slate-500 py-3 px-4">Status</th>
+                  <th className="text-left font-extrabold text-slate-500 py-3 px-4 cursor-pointer select-none hover:text-[#16A34A]" onClick={() => toggleSort('createdAt')}>
+                    Created <SortIndicator col="createdAt" />
+                  </th>
+                  <th className="text-right font-extrabold text-slate-500 py-3 px-4">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredPlans.map((plan) => {
+                  const inUse = Number(plan.restaurantCount || 0);
+                  return (
+                    <tr key={plan.id} className="border-t border-slate-50 hover:bg-slate-50/60 transition-colors">
+                      <td className="py-3 px-4">
+                        <div className="flex items-center gap-2.5">
+                          <div className={`w-8 h-8 rounded-lg ${COLOR_MAP[PLAN_COLORS[plans.indexOf(plan) % PLAN_COLORS.length]].bg} ${COLOR_MAP[PLAN_COLORS[plans.indexOf(plan) % PLAN_COLORS.length]].text} flex items-center justify-center`}>
+                            <Package className="w-4 h-4" />
                           </div>
-                        </td>
-                        <td className="py-3 px-4 font-bold text-slate-600">{fmtPrice(plan.monthlyPrice)}</td>
-                        <td className="py-3 px-4 font-bold text-slate-600">{fmtPrice(plan.yearlyPrice)}</td>
-                        <td className="py-3 px-4 text-center">
-                          <span className={`inline-flex items-center gap-1 font-extrabold ${inUse > 0 ? 'text-[#16A34A]' : 'text-slate-400'}`}>
-                            <Users className="w-3 h-3" />{inUse}
-                          </span>
-                        </td>
-                        <td className="py-3 px-4">
-                          {plan.isActive
-                            ? <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-green-50 text-green-600"><CheckCircle2 className="w-3 h-3" />Active</span>
-                            : <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-red-50 text-red-500"><XCircle className="w-3 h-3" />Inactive</span>}
-                        </td>
-                        <td className="py-3 px-4 text-slate-500 font-semibold">{new Date(plan.createdAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</td>
-                        <td className="py-3 px-4">
-                          <div className="flex justify-end gap-1">
-                            <button onClick={() => setModal({ plan })} title="Edit" className="w-7 h-7 flex items-center justify-center bg-white hover:bg-slate-50 border border-slate-200 rounded-lg text-slate-600 cursor-pointer"><Pencil className="w-3 h-3" /></button>
-                            <button onClick={() => handleDuplicate(plan)} title="Duplicate" className="w-7 h-7 flex items-center justify-center bg-cyan-50 hover:bg-cyan-100 text-cyan-600 rounded-lg cursor-pointer"><Copy className="w-3 h-3" /></button>
-                            <button onClick={() => handleToggle(plan)} title={plan.isActive ? 'Deactivate' : 'Activate'} className={`w-7 h-7 flex items-center justify-center rounded-lg cursor-pointer ${plan.isActive ? 'bg-amber-50 text-amber-600 hover:bg-amber-100' : 'bg-green-50 text-green-600 hover:bg-green-100'}`}><Power className="w-3 h-3" /></button>
-                            <button onClick={() => handleDelete(plan)} title={inUse > 0 ? 'Assigned — cannot delete' : 'Delete'} className={`w-7 h-7 flex items-center justify-center rounded-lg cursor-pointer ${inUse > 0 ? 'bg-slate-100 text-slate-400' : 'bg-red-50 text-red-500 hover:bg-red-100'}`}><Trash2 className="w-3 h-3" /></button>
+                          <div>
+                            <div className="font-extrabold text-slate-700 flex items-center gap-1.5">
+                              {plan.name}
+                              {plan.isDefault && <span className="text-[8px] font-bold px-1.5 py-0.5 rounded-full bg-slate-900 text-white uppercase tracking-wider">Default</span>}
+                            </div>
+                            <div className="text-[10px] text-slate-400 font-semibold">{plan.code}</div>
                           </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+                        </div>
+                      </td>
+                      <td className="py-3 px-4 font-bold text-slate-600">{fmtPrice(plan.monthlyPrice)}</td>
+                      <td className="py-3 px-4 font-bold text-slate-600">{fmtPrice(plan.yearlyPrice)}</td>
+                      <td className="py-3 px-4 text-center">
+                        <span className={`inline-flex items-center gap-1 font-extrabold ${inUse > 0 ? 'text-[#16A34A]' : 'text-slate-400'}`}>
+                          <Users className="w-3 h-3" />{inUse}
+                        </span>
+                      </td>
+                      <td className="py-3 px-4">
+                        {plan.isActive
+                          ? <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-green-50 text-green-600"><CheckCircle2 className="w-3 h-3" />Active</span>
+                          : <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-red-50 text-red-500"><XCircle className="w-3 h-3" />Inactive</span>}
+                      </td>
+                      <td className="py-3 px-4 text-slate-500 font-semibold">{new Date(plan.createdAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</td>
+                      <td className="py-3 px-4">
+                        <div className="flex justify-end gap-1">
+                          <button onClick={() => setModal({ plan })} title="Edit" className="w-7 h-7 flex items-center justify-center bg-white hover:bg-slate-50 border border-slate-200 rounded-lg text-slate-600 cursor-pointer"><Pencil className="w-3 h-3" /></button>
+                          <button onClick={() => handleDuplicate(plan)} title="Duplicate" className="w-7 h-7 flex items-center justify-center bg-cyan-50 hover:bg-cyan-100 text-cyan-600 rounded-lg cursor-pointer"><Copy className="w-3 h-3" /></button>
+                          <button onClick={() => handleToggle(plan)} title={plan.isActive ? 'Deactivate' : 'Activate'} className={`w-7 h-7 flex items-center justify-center rounded-lg cursor-pointer ${plan.isActive ? 'bg-amber-50 text-amber-600 hover:bg-amber-100' : 'bg-green-50 text-green-600 hover:bg-green-100'}`}><Power className="w-3 h-3" /></button>
+                          <button onClick={() => handleDelete(plan)} title={inUse > 0 ? 'Assigned — cannot delete' : 'Delete'} className={`w-7 h-7 flex items-center justify-center rounded-lg cursor-pointer ${inUse > 0 ? 'bg-slate-100 text-slate-400' : 'bg-red-50 text-red-500 hover:bg-red-100'}`}><Trash2 className="w-3 h-3" /></button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
-        </>
+        </div>
       )}
 
       {modal && (
         <PlanFormModal
           plan={modal.plan}
-          modules={modules}
           onClose={() => setModal(null)}
           onSaved={() => { setModal(null); load(); showToast(modal.plan ? 'Plan updated — changes applied to all assigned restaurants' : 'Plan created'); }}
         />
@@ -617,7 +589,7 @@ export default function PlansManagement() {
           onConfirm={handleConfirm}
           title={confirm.type === 'duplicate' ? 'Duplicate Plan?' : 'Delete Plan?'}
           message={confirm.type === 'duplicate'
-            ? `Duplicate plan "${confirm.plan?.name}"? A copy including its module access will be created.`
+            ? `Duplicate plan "${confirm.plan?.name}"? A copy including its entitlements will be created.`
             : `Are you sure you want to delete plan "${confirm.plan?.name}"? This cannot be undone.`}
           confirmLabel={confirm.type === 'duplicate' ? 'Duplicate' : 'Delete'}
           cancelLabel="Cancel"

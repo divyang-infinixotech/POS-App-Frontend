@@ -68,7 +68,7 @@ export const SCREEN_PERMISSIONS = {
   sa_dashboard: [ROLES.SUPER_ADMIN],
   sa_restaurants: [ROLES.SUPER_ADMIN],
   sa_subscriptions: [ROLES.SUPER_ADMIN],
-  sa_users: [ROLES.SUPER_ADMIN],
+  // sa_users removed from Super Admin UI — kept in codebase for backward compatibility
   sa_plans: [ROLES.SUPER_ADMIN],
   sa_invoices: [ROLES.SUPER_ADMIN],
   sa_reports: [ROLES.SUPER_ADMIN],

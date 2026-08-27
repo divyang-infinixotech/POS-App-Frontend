@@ -29,7 +29,7 @@ export default function PosWorkspace() {
   // view 'categories' = large touch-friendly category picker (shown first)
   // view 'items'     = items belonging to the selected category
   const [view, setView] = useState('categories');
-  const [selectedCategory, setSelectedCategory] = useState('All'); // 'All' is the default selection
+  const [selectedCategory, setSelectedCategory] = useState(null); // null = show categories view, then first cat
   const [searchQuery, setSearchQuery] = useState('');
 
   // ── Cart / order state ──
@@ -101,10 +101,9 @@ export default function PosWorkspace() {
   const catsWithItems = categories.filter(
     (c) => c.isActive !== false && liveItems.some((i) => i.category === c.name)
   );
-  const totalLiveCount = liveItems.length;
 
   const filteredItems = liveItems.filter((item) => {
-    const matchesCat = selectedCategory === 'All' || item.category === selectedCategory;
+    const matchesCat = !selectedCategory || item.category === selectedCategory;
     const matchesSearch = item.name.toLowerCase().includes(searchQuery.toLowerCase());
     return matchesCat && matchesSearch;
   });
@@ -239,29 +238,16 @@ export default function PosWorkspace() {
     setView('items');
   };
 
+  // When entering items view without a category, auto-select first
+  const handleBackToCategories = () => {
+    setSelectedCategory(null);
+    setView('categories');
+  };
+
   // ── Category picker view (large touch cards) ──
   const renderCategories = () => (
     <div className="flex-1 overflow-y-auto pr-0.5">
       <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3.5">
-        {/* All Categories — the default selection */}
-        <button
-          onClick={() => selectCategory('All')}
-          className={`group relative flex flex-col items-center justify-center gap-2.5 min-h-[120px] p-4 rounded-2xl border-2 transition-all cursor-pointer active:scale-[0.97] ${
-            selectedCategory === 'All'
-              ? 'border-[#16A34A] bg-gradient-to-br from-emerald-50 to-white shadow-md'
-              : 'border-slate-200 bg-white hover:border-[#16A34A]/60 hover:shadow-sm'
-          }`}
-        >
-          <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-[#16A34A] to-[#15803D] flex items-center justify-center text-2xl shadow-sm">
-            🍽️
-          </div>
-          <div className="text-center">
-            <p className="text-sm font-extrabold text-slate-800">All Categories</p>
-            <p className="text-[11px] font-bold text-slate-400 mt-0.5">{totalLiveCount} items</p>
-          </div>
-          <span className="absolute top-2.5 right-2.5 text-[8px] font-bold uppercase tracking-wider text-[#16A34A] bg-emerald-100 rounded-full px-1.5 py-0.5">Default</span>
-        </button>
-
         {catsWithItems.map((cat) => (
           <button
             key={cat.id}
@@ -358,7 +344,7 @@ export default function PosWorkspace() {
         <div className="flex items-center gap-3 shrink-0">
           {view === 'items' ? (
             <button
-              onClick={() => setView('categories')}
+              onClick={handleBackToCategories}
               className="inline-flex items-center gap-1.5 h-9 px-3.5 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 font-bold rounded-xl text-[11px] uppercase tracking-wider transition-all cursor-pointer"
             >
               <ChevronLeft className="w-4 h-4" />
@@ -378,7 +364,7 @@ export default function PosWorkspace() {
               {counterSaleMode ? 'Basic POS' : 'POS Ordering'}
             </h3>
             <p className="text-[10px] text-slate-400 mt-0.5 truncate">
-              {view === 'categories' ? 'Select a category to start' : `${selectedCategory === 'All' ? 'All Categories' : selectedCategory} · ${filteredItems.length} items`}
+              {view === 'categories' ? 'Select a category to start' : `${selectedCategory || 'All'} · ${filteredItems.length} items`}
             </p>
           </div>
         </div>
@@ -386,8 +372,6 @@ export default function PosWorkspace() {
         {/* Items view: quick category chips for fast navigation */}
         {view === 'items' && (
           <div className="flex gap-1 overflow-x-auto pb-0.5 no-scrollbar shrink-0">
-            <button onClick={() => selectCategory('All')}
-              className={`shrink-0 px-3 py-2 text-[11px] font-bold rounded-xl transition-all cursor-pointer ${selectedCategory === 'All' ? 'bg-[#16A34A] text-white shadow-xs' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>All</button>
             {catsWithItems.map((cat) => (
               <button key={cat.id} onClick={() => selectCategory(cat.name)}
                 className={`shrink-0 px-3 py-2 text-[11px] font-bold rounded-xl transition-all cursor-pointer ${selectedCategory === cat.name ? 'text-white shadow-xs' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
@@ -412,8 +396,8 @@ export default function PosWorkspace() {
         {view === 'categories' ? renderCategories() : renderItems()}
       </div>
 
-      {/* Right: Cart — full width below the grid on mobile, fixed rail on md+ */}
-      <div className="w-full md:w-72 lg:w-80 md:h-full bg-white rounded-[18px] border border-slate-200 shadow-xs flex flex-col overflow-hidden shrink-0 md:min-h-0">
+      {/* Right: Cart — full width below the grid on mobile, wider fixed rail on md+ for touch comfort */}
+      <div className="w-full md:w-[340px] lg:w-[380px] xl:w-[420px] md:h-full bg-white rounded-[18px] border border-slate-200 shadow-xs flex flex-col overflow-hidden shrink-0 md:min-h-0">
         {/* Cart Header */}
         <div className="px-4 py-3 border-b border-slate-100 bg-slate-50">
           <div className="flex items-center justify-between mb-2">

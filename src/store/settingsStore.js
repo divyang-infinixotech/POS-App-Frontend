@@ -111,7 +111,7 @@ const getCurrencySymbol = (currency) => {
 const defaultSettings = {
   branding: {
     logo: '',
-    restaurantName: 'Restaurant POS',
+    restaurantName: 'Nirka POS',
     ownerName: '',
     loginLogo: '',
     sidebarLogo: '',

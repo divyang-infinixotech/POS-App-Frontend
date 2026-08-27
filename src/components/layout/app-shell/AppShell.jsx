@@ -35,6 +35,7 @@ const SuperAdminDashboard = lazy(() => import('../../../features/super-admin/pag
 const RestaurantList = lazy(() => import('../../../features/super-admin/pages/RestaurantList'));
 const SubscriptionManagement = lazy(() => import('../../../features/super-admin/pages/SubscriptionManagement'));
 const UserManagement = lazy(() => import('../../../features/super-admin/pages/UserManagement'));
+// Note: UserManagement is kept in the codebase but removed from SA sidebar navigation.
 const PlatformReports = lazy(() => import('../../../features/super-admin/pages/PlatformReports'));
 const Notifications = lazy(() => import('../../../features/super-admin/pages/Notifications'));
 const SystemSettings = lazy(() => import('../../../features/super-admin/pages/SystemSettings'));
@@ -129,10 +130,8 @@ const SCREEN_TO_SETTING = {
 };
 
 // ── Super Admin screens never need module visibility checks ──
-const SUPER_ADMIN_SCREENS = [
-  'sa_dashboard', 'sa_restaurants', 'sa_subscriptions', 'sa_users',
-  'sa_plans', 'sa_invoices', 'sa_reports',
-  'sa_notifications', 'sa_settings', 'sa_gateway', 'sa_audit', 'sa_profile',
+const SUPER_ADMIN_SCREENS = [  'sa_dashboard', 'sa_restaurants', 'sa_subscriptions',
+  'sa_plans', 'sa_invoices', 'sa_reports', 'sa_notifications', 'sa_settings', 'sa_gateway', 'sa_audit', 'sa_profile',
 ];
 
 // ── Priority-ordered fallback screens (first enabled module wins) ──
