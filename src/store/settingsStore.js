@@ -71,8 +71,8 @@ const UI_ONLY_KEYS = [
   'enablePosOrdering', 'enableKitchen', 'enableBilling', 'enableHoldOrders', 'enableAddItem',
   'enableSplitBill', 'enableTransferTable', 'enableMergeTables', 'enableFloorManagement',
   'enableReports', 'enableMenu', 'enableStock', 'enableActiveOrders', 'enableTableReservations',
-  // Business Mode & Counter Sale
-  'businessMode', 'enableCounterSale',
+  // Counter Sale (businessMode is derived from subscription — not UI-persisted)
+  'enableCounterSale',
   // Billing behavior
   'autoPrintBill', 'autoPrintKOT', 'multiplePayments', 'askCustomerBeforePrint',
   'autoReleaseTable', 'autoGenerateKOT',
@@ -380,7 +380,7 @@ const useSettingsStore = create((set, get) => ({
         'enableFloorManagement', 'enableReports', 'enableMenu', 'enableStock',
         'enableActiveOrders', 'enableTableReservations', 'autoPrintBill', 'autoPrintKOT',
         'autoGenerateKOT', 'multiplePayments', 'askCustomerBeforePrint', 'autoReleaseTable',
-        'printers', 'enablePosOrdering', 'posLayout', 'businessMode', 'enableCounterSale',
+        'printers', 'enablePosOrdering', 'posLayout', 'enableCounterSale',
         'taxType', 'taxesAndCharges',
       ];
       const uiSettings = {};
@@ -442,7 +442,7 @@ const useSettingsStore = create((set, get) => ({
         // POS Ordering / Layout (persisted per restaurant)
         enablePosOrdering: Boolean(s.enablePosOrdering !== false),
         posLayout: s.posLayout || 'basic',
-        businessMode: s.businessMode || 'restaurant',
+        // businessMode is derived from the subscription plan — not sent by admin
         enableCounterSale: Boolean(s.enableCounterSale === true),
         taxType: s.taxType || 'Inclusive',
         taxesAndCharges: Array.isArray(s.taxesAndCharges) ? s.taxesAndCharges : [],
@@ -494,6 +494,8 @@ const useSettingsStore = create((set, get) => ({
   },
 
   // ── Business Mode: auto-configure multiple visibility toggles ─────────────
+  // Called internally when subscription businessMode changes. Admins cannot
+  // invoke this directly — the mode is derived from the subscription plan.
   applyBusinessMode: async (mode) => {
     const preset = BUSINESS_MODE_PRESETS[mode];
     if (!preset) return;

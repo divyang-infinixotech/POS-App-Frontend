@@ -105,7 +105,13 @@ export default function LoginPage() {
         setLocalError('Incorrect User ID or Password. Please try again.');
       }
     } catch (e) {
-      setLocalError('Login failed. Please check your connection and try again.');
+      if (e.status === 500) {
+        setLocalError('Unable to sign in right now. Please try again.');
+      } else if (e.status === 403) {
+        setLocalError(e.message || 'Your account has been disabled. Contact your administrator.');
+      } else {
+        setLocalError(e.message || 'Login failed. Please check your connection and try again.');
+      }
     } finally {
       setLoading(false);
     }

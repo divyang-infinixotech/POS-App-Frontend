@@ -181,8 +181,11 @@ const useAuthStore = create((set, get) => ({
       set({ error: 'Invalid credentials', loading: false });
       return false;
     } catch (e) {
-      set({ error: e.message, loading: false });
-      return false;
+      // Preserve HTTP status so callers can distinguish auth errors from server errors
+      const authError = new Error(e.message || 'Login failed');
+      authError.status = e.status;
+      set({ error: authError.message, loading: false });
+      throw authError;
     }
   },
 

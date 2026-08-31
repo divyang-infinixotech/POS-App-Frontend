@@ -5,7 +5,7 @@ import ConfirmationDialog from '../../../components/ConfirmationDialog';
 import {
   Package, Plus, Pencil, Trash2, Power, Loader2, RefreshCw, Copy, Search,
   Users, Monitor, Utensils, Printer, HardDrive, Building2, CreditCard,
-  CheckCircle2, XCircle, X, Save, Layers, ShoppingCart, Globe, Cpu, Network,
+  CheckCircle2, Check, XCircle, X, Save, Layers, ShoppingCart, Globe, Cpu, Network,
   Settings as SettingsIcon, ChevronUp, ChevronDown, ArrowUpDown, Sparkles,
 } from 'lucide-react';
 
@@ -35,7 +35,8 @@ const LIMIT_FIELDS = [
 ];
 
 const EMPTY_PLAN = {
-  code: '', name: '', description: '', monthlyPrice: 0, yearlyPrice: 0,
+  code: '', name: '', description: '', businessMode: 'RESTAURANT',
+  monthlyPrice: 0, yearlyPrice: 0,
   billingCycle: 'MONTHLY', trialDays: 0,
   maxUsers: '', maxTables: '', maxFloors: '', maxMenuItems: '', maxPrinters: '',
   maxBranches: '', maxOrdersPerMonth: '', storageLimitMB: '',
@@ -59,6 +60,7 @@ const PlanFormModal = ({ plan, onClose, onSaved }) => {
     if (!plan) return { ...EMPTY_PLAN };
     return {
       code: plan.code || '', name: plan.name || '', description: plan.description || '',
+      businessMode: plan.businessMode || 'RESTAURANT',
       monthlyPrice: plan.monthlyPrice ?? 0, yearlyPrice: plan.yearlyPrice ?? 0,
       billingCycle: plan.billingCycle || 'MONTHLY', trialDays: plan.trialDays ?? 0,
       maxUsers: plan.maxUsers ?? '', maxTables: plan.maxTables ?? '', maxFloors: plan.maxFloors ?? '',
@@ -81,6 +83,7 @@ const PlanFormModal = ({ plan, onClose, onSaved }) => {
     try {
       const payload = {
         code: form.code, name: form.name, description: form.description || '',
+        businessMode: form.businessMode,
         monthlyPrice: Number(form.monthlyPrice || 0), yearlyPrice: Number(form.yearlyPrice || 0),
         billingCycle: form.billingCycle, trialDays: Number(form.trialDays || 0),
         maxUsers: form.maxUsers === '' ? null : Number(form.maxUsers),
@@ -153,6 +156,43 @@ const PlanFormModal = ({ plan, onClose, onSaved }) => {
             <div className="mt-3">
               <label className={labelCls}>Description</label>
               <textarea value={form.description} onChange={(e) => set('description', e.target.value)} rows={2} className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold outline-none focus:border-[#16A34A] resize-none" placeholder="Brief description of this plan..." />
+            </div>
+          </div>
+
+          {/* Business Mode */}
+          <div>
+            <p className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500 mb-1">Business Mode</p>
+            <p className="text-[10px] text-slate-400 mb-3">Choose the POS experience provided by this subscription plan.</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {[
+                { mode: 'RESTAURANT', label: 'Restaurant', desc: 'Full restaurant operations', details: 'Tables • KOT • Kitchen • Orders', emoji: '🍽️' },
+                { mode: 'BASIC_POS', label: 'Basic POS', desc: 'Quick billing', details: 'No tables • No KOT', emoji: '🧾' },
+              ].map(({ mode, label, desc, details, emoji }) => (
+                <button
+                  type="button"
+                  key={mode}
+                  onClick={() => set('businessMode', mode)}
+                  className={`p-4 rounded-2xl border-2 text-left transition-all cursor-pointer ${
+                    form.businessMode === mode
+                      ? 'border-[#16A34A] bg-[#16A34A]/5 shadow-md'
+                      : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50'
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <span className="text-2xl">{emoji}</span>
+                    <div>
+                      <p className="text-xs font-extrabold text-slate-800">{label}</p>
+                      <p className="text-[9px] text-slate-500 mt-0.5">{desc}</p>
+                      <p className="text-[9px] text-slate-400 mt-0.5">{details}</p>
+                    </div>
+                    {form.businessMode === mode && (
+                      <div className="ml-auto">
+                        <Check className="w-5 h-5 text-[#16A34A]" />
+                      </div>
+                    )}
+                  </div>
+                </button>
+              ))}
             </div>
           </div>
 
@@ -467,6 +507,14 @@ export default function PlansManagement() {
                 </div>
 
                 <div className="mt-3 space-y-1.5 flex-1">
+                  <div className="flex items-center justify-between text-[10px]">
+                    <span className="font-semibold text-slate-400">Business Mode</span>
+                    <span className={`font-extrabold text-[9px] px-2 py-0.5 rounded-full uppercase tracking-wider ${
+                      (plan.businessMode || 'RESTAURANT') === 'BASIC_POS'
+                        ? 'bg-amber-50 text-amber-600 border border-amber-200'
+                        : 'bg-[#16A34A]/10 text-[#16A34A] border border-[#16A34A]/20'
+                    }`}> {(plan.businessMode || 'RESTAURANT') === 'BASIC_POS' ? 'BASIC POS' : 'RESTAURANT'} </span>
+                  </div>
                   {LIMIT_FIELDS.slice(0, 4).map((f) => (
                     <div key={f.key} className="flex items-center justify-between text-[10px]">
                       <span className="font-semibold text-slate-400 flex items-center gap-1.5"><f.icon className="w-3 h-3" />{f.label}</span>
@@ -516,6 +564,7 @@ export default function PlansManagement() {
                   <th className="text-left font-extrabold text-slate-500 py-3 px-4 cursor-pointer select-none hover:text-[#16A34A]" onClick={() => toggleSort('yearlyPrice')}>
                     Yearly <SortIndicator col="yearlyPrice" />
                   </th>
+                  <th className="text-left font-extrabold text-slate-500 py-3 px-4">Business Mode</th>
                   <th className="text-center font-extrabold text-slate-500 py-3 px-4">Restaurants</th>
                   <th className="text-left font-extrabold text-slate-500 py-3 px-4">Status</th>
                   <th className="text-left font-extrabold text-slate-500 py-3 px-4 cursor-pointer select-none hover:text-[#16A34A]" onClick={() => toggleSort('createdAt')}>
@@ -545,6 +594,15 @@ export default function PlansManagement() {
                       </td>
                       <td className="py-3 px-4 font-bold text-slate-600">{fmtPrice(plan.monthlyPrice)}</td>
                       <td className="py-3 px-4 font-bold text-slate-600">{fmtPrice(plan.yearlyPrice)}</td>
+                      <td className="py-3 px-4">
+                        <span className={`inline-flex items-center gap-1 text-[9px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider ${
+                          (plan.businessMode || 'RESTAURANT') === 'BASIC_POS'
+                            ? 'bg-amber-50 text-amber-600 border border-amber-200'
+                            : 'bg-[#16A34A]/10 text-[#16A34A] border border-[#16A34A]/20'
+                        }`}>
+                          {(plan.businessMode || 'RESTAURANT') === 'BASIC_POS' ? 'BASIC POS' : 'RESTAURANT'}
+                        </span>
+                      </td>
                       <td className="py-3 px-4 text-center">
                         <span className={`inline-flex items-center gap-1 font-extrabold ${inUse > 0 ? 'text-[#16A34A]' : 'text-slate-400'}`}>
                           <Users className="w-3 h-3" />{inUse}

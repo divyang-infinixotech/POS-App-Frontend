@@ -145,7 +145,7 @@ const MODULE_TOGGLES = [
     key: 'enablePosOrdering',
     label: 'Enable POS Ordering Screen',
     description: "If ON: All orders start from POS Ordering (New Ticket button is hidden). If OFF: Hide 'POS Ordering' from the sidebar and show the New Ticket button instead.",
-    modes: ['counter', 'hybrid'],
+    modes: ['hybrid'],
   },
   {
     key: 'enableCounterSale',
@@ -437,45 +437,40 @@ export default function SettingsPage() {
       case 'pos_screen':
         return (
           <div className="space-y-5">
-            <SectionCard title="Business Mode" description="Choose a mode that best fits your business. This auto-configures multiple module visibility settings at once." icon={Layout}>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {[
-                  {
-                    mode: 'restaurant',
-                    label: 'Restaurant',
-                    desc: 'Full dine-in with tables, KOT, Active Orders',
-                    emoji: '🍽️',
-                  },
-                  {
-                    mode: 'counter',
-                    label: 'Basic POS',
-                    desc: 'Quick billing, no tables/KOT/active orders',
-                    emoji: '🧾',
-                  },
-                ].map(({ mode, label, desc, emoji }) => (
-                  <button
-                    key={mode}
-                    onClick={() => {
-                      const store = useSettingsStore.getState();
-                      store.applyBusinessMode(mode);
-                      addToast(`${label} mode applied`, 'success');
-                    }}
-                    className={`p-4 rounded-2xl border-2 text-center transition-all cursor-pointer ${
-                      businessMode === mode
-                        ? 'border-[#16A34A] bg-[#16A34A]/5 shadow-md'
-                        : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50'
-                    }`}
-                  >
-                    <span className="text-2xl block mb-2">{emoji}</span>
-                    <p className="text-xs font-extrabold text-slate-800">{label}</p>
-                    <p className="text-[9px] text-slate-500 mt-1 leading-tight">{desc}</p>
-                  </button>
-                ))}
-              </div>
-              <p className="text-[10px] text-slate-400 bg-slate-50 rounded-xl p-3 border border-slate-100">
-                The controls below adapt to the selected mode — settings that do not apply to the current
-                business mode are hidden automatically.
-              </p>
+            <SectionCard title="Business Mode" description="Your business mode is determined by your subscription plan." icon={Layout}>
+              {(() => {
+                const isRestaurant = businessMode === 'restaurant';
+                const modeLabel = isRestaurant ? 'Restaurant' : 'Basic POS';
+                const modeDesc = isRestaurant
+                  ? 'Full dine-in restaurant operations'
+                  : 'Quick billing and POS operations';
+                const modeDetails = isRestaurant
+                  ? 'Tables • KOT • Kitchen • Active Orders'
+                  : 'No tables • No KOT/Kitchen workflow';
+                const emoji = isRestaurant ? '🍽️' : '🧾';
+                return (
+                  <div>
+                    <div className={`p-4 rounded-2xl border-2 ${
+                      isRestaurant ? 'border-[#16A34A] bg-[#16A34A]/5' : 'border-amber-300 bg-amber-50/50'
+                    }`}> 
+                      <div className="flex items-center gap-3">
+                        <span className="text-2xl">{emoji}</span>
+                        <div className="flex-1">
+                          <p className="text-xs font-extrabold text-slate-800">{modeLabel}</p>
+                          <p className="text-[9px] text-slate-500 mt-0.5">{modeDesc}</p>
+                          <p className="text-[9px] text-slate-400 mt-0.5">{modeDetails}</p>
+                        </div>
+                        <div className="flex items-center gap-1 text-[9px] font-bold text-[#16A34A]">
+                          <Check className="w-3 h-3" /> Included in your current plan
+                        </div>
+                      </div>
+                    </div>
+                    <p className="text-[10px] text-slate-400 mt-3 bg-slate-50 rounded-xl p-3 border border-slate-100">
+                      Business mode is managed by your subscription plan. Contact your administrator to change your plan.
+                    </p>
+                  </div>
+                );
+              })()}
             </SectionCard>
 
             <SectionCard title="Module Visibility" description="Enable or disable entire modules. Disabled modules are hidden from the sidebar and blocked from all workflows." icon={Monitor}>
