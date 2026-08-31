@@ -22,6 +22,30 @@ export const superAdminApi = {
   createRestaurant: (data) =>
     apiClient.post('/super-admin/restaurants', data),
   
+  createRestaurantOnboarding: (data) =>
+    apiClient.post('/super-admin/restaurants/onboarding', data),
+  
+  uploadDocument: (restaurantId, formData) =>
+    apiClient.post(`/super-admin/restaurants/${restaurantId}/documents`, formData),
+  
+  getDocuments: (restaurantId) =>
+    apiClient.get(`/super-admin/restaurants/${restaurantId}/documents`),
+  
+  verifyDocument: (restaurantId, documentId) =>
+    apiClient.patch(`/super-admin/restaurants/${restaurantId}/documents/${documentId}/verify`),
+  
+  rejectDocument: (restaurantId, documentId, reason) =>
+    apiClient.patch(`/super-admin/restaurants/${restaurantId}/documents/${documentId}/reject`, { reason }),
+  
+  deleteDocument: (restaurantId, documentId) =>
+    apiClient.delete(`/super-admin/restaurants/${restaurantId}/documents/${documentId}`),
+  
+  createPolicyAgreement: (restaurantId, data) =>
+    apiClient.post(`/super-admin/restaurants/${restaurantId}/policy-agreements`, data),
+  
+  getPolicyAgreements: (restaurantId) =>
+    apiClient.get(`/super-admin/restaurants/${restaurantId}/policy-agreements`),
+  
   updateRestaurant: (id, data) =>
     apiClient.put(`/super-admin/restaurants/${id}`, data),
   

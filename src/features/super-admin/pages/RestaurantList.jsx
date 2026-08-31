@@ -23,6 +23,7 @@ import {
   Building2,
 } from 'lucide-react';
 import RestaurantForm from '../components/RestaurantForm';
+import RestaurantOnboarding from '../components/RestaurantOnboarding';
 import RestaurantDetail from './RestaurantDetail';
 import PlanChangeDialog from '../components/PlanChangeDialog';
 
@@ -37,6 +38,7 @@ export default function RestaurantList() {
   const [page, setPage] = useState(1);
   const [pagination, setPagination] = useState(null);
   const [showForm, setShowForm] = useState(false);
+  const [showOnboarding, setShowOnboarding] = useState(false);
   const [editRestaurant, setEditRestaurant] = useState(null);
   const [viewDetail, setViewDetail] = useState(null);
   const [actionMenu, setActionMenu] = useState(null);
@@ -282,7 +284,7 @@ export default function RestaurantList() {
           <p className="text-xs text-slate-500 mt-1">Manage restaurants and their subscriptions</p>
         </div>
         <button
-          onClick={() => { setEditRestaurant(null); setShowForm(true); }}
+          onClick={() => { setEditRestaurant(null); setShowOnboarding(true); }}
           className="h-9 px-4 bg-[#16A34A] hover:bg-[#15803D] text-white rounded-xl text-xs font-bold transition-all cursor-pointer shadow-sm flex items-center gap-1.5"
         >
           <Plus className="w-3.5 h-3.5" />
@@ -462,7 +464,15 @@ export default function RestaurantList() {
         )}
       </div>
 
-      {/* Restaurant Form Modal */}
+      {/* Onboarding Wizard (new restaurant) */}
+      {showOnboarding && (
+        <RestaurantOnboarding
+          onClose={() => setShowOnboarding(false)}
+          onSaved={() => { setShowOnboarding(false); loadRestaurants(); }}
+        />
+      )}
+
+      {/* Restaurant Form Modal (edit only) */}
       {showForm && (
         <RestaurantForm
           restaurant={editRestaurant}
