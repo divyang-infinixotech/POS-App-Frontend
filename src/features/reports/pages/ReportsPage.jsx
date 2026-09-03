@@ -70,7 +70,6 @@ export default function ReportsPage() {
   const [staffActivity, setStaffActivity] = useState([]);
   const [staffDiscountCancellation, setStaffDiscountCancellation] = useState(null);
   const [dailyClosing, setDailyClosing] = useState(null);
-  const [monthlySummary, setMonthlySummary] = useState(null);
   const [restaurantPerformance, setRestaurantPerformance] = useState(null);
 
   const [loading, setLoading] = useState(true);
@@ -135,91 +134,146 @@ export default function ReportsPage() {
     return 'Failed to load reports.';
   }, []);
 
-  // ── Load Reports ──
+  // ── Load Reports (per-category optimized) ──
   const loadReports = useCallback(async () => {
     if (!dateRange.start || !dateRange.end) return;
     setLoading(true);
     setError(null);
     try {
       const params = { from: dateRange.start, to: dateRange.end };
-      const results = await Promise.allSettled([
-        reportApi.getSales(params),
-        reportApi.getItemSales(params),
-        reportApi.getCategorySales(params),
-        reportApi.getPaymentReport(params),
-        reportApi.getOrders({ ...params, page: orderPage, pageSize: 10 }),
-        reportApi.getDiscountReport(params),
-        reportApi.getCancellationReport(params),
-        reportApi.getKotRegister(params),
-        reportApi.getKotSummary(params),
-        reportApi.getKitchenPerformance(params),
-        reportApi.getMenuPerformance(params),
-        reportApi.getTopSellingItems(params),
-        reportApi.getLowSellingItems(params),
-        reportApi.getCategoryPerformance(params),
-        reportApi.getTableSales(params),
-        reportApi.getTableOccupancy(),
-        reportApi.getStaffSales(params),
-        reportApi.getStaffActivity(params),
-        reportApi.getStaffDiscountCancellation(params),
-        reportApi.getDailyClosing({ date: dateRange.end }),
-        reportApi.getMonthlySummary(params),
-        reportApi.getRestaurantPerformance(params),
-      ]);
-
       const extract = (r) => r.status === 'fulfilled' ? (r.value?.data ?? r.value) : null;
-      const [s, i, c, p, o, disc, cancel, kr, ks, kp, mp, ts, ls, cp, tsales, to, ss, sa, sdc, dc, ms, rp] = results;
 
-      setSalesData(extract(s));
-      setItemSales(Array.isArray(extract(i)) ? extract(i) : extract(i)?.items || []);
-      setCategorySales(Array.isArray(extract(c)) ? extract(c) : extract(c)?.categories || []);
-      setPaymentData(extract(p));
-      setOrderReportData(extract(o));
-      setDiscountData(extract(disc));
-      setCancellationData(extract(cancel));
-      setKotRegister(extract(kr));
-      setKotSummary(extract(ks));
-      setKitchenPerformance(extract(kp));
-      setMenuPerformance(Array.isArray(extract(mp)) ? extract(mp) : extract(mp)?.items || []);
-      setTopSelling(extract(ts));
-      setLowSelling(extract(ls));
-      setCategoryPerformance(Array.isArray(extract(cp)) ? extract(cp) : extract(cp)?.categories || []);
-      setTableSales(Array.isArray(extract(tsales)) ? extract(tsales) : extract(tsales)?.tables || []);
-      setTableOccupancy(extract(to));
-      setStaffSales(Array.isArray(extract(ss)) ? extract(ss) : extract(ss)?.staff || []);
-      setStaffActivity(Array.isArray(extract(sa)) ? extract(sa) : extract(sa)?.activity || []);
-      setStaffDiscountCancellation(extract(sdc));
-      setDailyClosing(extract(dc));
-      setMonthlySummary(extract(ms));
-      setRestaurantPerformance(extract(rp));
-
-      // Only set global error for critical/auth failures — individual report
-      // failures are handled gracefully by each component (empty state).
-      const salesRejected = s.status === 'rejected';
-      const salesReason = s.reason;
-      if (salesRejected && salesReason?.status === 401) {
-        setError('Your session has expired. Please sign in again.');
-      } else if (salesRejected && salesReason?.status === 403) {
-        setError('You do not have permission to view reports.');
-      } else if (salesRejected && salesReason?.status === 0) {
-        setError('Unable to connect to the server. Please check your connection.');
+      // Only load APIs relevant to the active category
+      let results;
+      switch (activeCategory) {
+        case 'sales':
+          results = await Promise.allSettled([
+            reportApi.getSales(params),
+            reportApi.getItemSales(params),
+            reportApi.getCategorySales(params),
+          ]);
+          {
+            const [s, i, catSales] = results;
+            setSalesData(extract(s));
+            setItemSales(Array.isArray(extract(i)) ? extract(i) : extract(i)?.items || []);
+            setCategorySales(Array.isArray(extract(catSales)) ? extract(catSales) : extract(catSales)?.categories || []);
+          }
+          break;
+        case 'orders':
+          results = await Promise.allSettled([
+            reportApi.getOrders({ ...params, page: orderPage, pageSize: 10 }),
+            reportApi.getCancellationReport(params),
+          ]);
+          {
+            const [o, cancel] = results;
+            setOrderReportData(extract(o));
+            setCancellationData(extract(cancel));
+          }
+          break;
+        case 'payments':
+          results = await Promise.allSettled([
+            reportApi.getPaymentReport(params),
+          ]);
+          {
+            const [p] = results;
+            setPaymentData(extract(p));
+          }
+          break;
+        case 'discounts':
+          results = await Promise.allSettled([
+            reportApi.getDiscountReport(params),
+          ]);
+          {
+            const [disc] = results;
+            setDiscountData(extract(disc));
+          }
+          break;
+        case 'kitchen':
+          results = await Promise.allSettled([
+            reportApi.getKotRegister(params),
+            reportApi.getKotSummary(params),
+            reportApi.getKitchenPerformance(params),
+          ]);
+          {
+            const [kr, ks, kp] = results;
+            setKotRegister(extract(kr));
+            setKotSummary(extract(ks));
+            setKitchenPerformance(extract(kp));
+          }
+          break;
+        case 'menu':
+          results = await Promise.allSettled([
+            reportApi.getMenuPerformance(params),
+            reportApi.getTopSellingItems(params),
+            reportApi.getLowSellingItems(params),
+            reportApi.getCategoryPerformance(params),
+          ]);
+          {
+            const [mp, ts, ls, cp] = results;
+            setMenuPerformance(Array.isArray(extract(mp)) ? extract(mp) : extract(mp)?.items || []);
+            setTopSelling(extract(ts));
+            setLowSelling(extract(ls));
+            setCategoryPerformance(Array.isArray(extract(cp)) ? extract(cp) : extract(cp)?.categories || []);
+          }
+          break;
+        case 'tables':
+          results = await Promise.allSettled([
+            reportApi.getTableSales(params),
+            reportApi.getTableOccupancy(),
+          ]);
+          {
+            const [tsales, to] = results;
+            setTableSales(Array.isArray(extract(tsales)) ? extract(tsales) : extract(tsales)?.tables || []);
+            setTableOccupancy(extract(to));
+          }
+          break;
+        case 'staff':
+          results = await Promise.allSettled([
+            reportApi.getStaffSales(params),
+            reportApi.getStaffActivity(params),
+            reportApi.getStaffDiscountCancellation(params),
+          ]);
+          {
+            const [ss, sa, sdc] = results;
+            setStaffSales(Array.isArray(extract(ss)) ? extract(ss) : extract(ss)?.staff || []);
+            setStaffActivity(Array.isArray(extract(sa)) ? extract(sa) : extract(sa)?.activity || []);
+            setStaffDiscountCancellation(extract(sdc));
+          }
+          break;
+        case 'management':
+          results = await Promise.allSettled([
+            reportApi.getDailyClosing({ date: dateRange.end }),
+            reportApi.getRestaurantPerformance(params),
+          ]);
+          {
+            const [dc, rp] = results;
+            setDailyClosing(extract(dc));
+            setRestaurantPerformance(extract(rp));
+          }
+          break;
+        default:
+          results = [];
       }
-      // For other individual report failures, do NOT set global error —
-      // each component shows its own empty state.
+
+      if (results && results.length > 0) {
+        const firstRejected = results.find(r => r.status === 'rejected');
+        if (firstRejected) {
+          const reason = firstRejected.reason;
+          if (reason?.status === 401) setError('Your session has expired. Please sign in again.');
+          else if (reason?.status === 403) setError('You do not have permission to view reports.');
+          else if (reason?.status === 0) setError('Unable to connect to the server. Please check your connection.');
+        }
+      }
     } catch (e) {
-      if (e?.status === 0) {
-        setError('Unable to connect to the server. Please check your connection.');
-      } else if (e?.status === 401) {
-        setError('Your session has expired. Please sign in again.');
-      } else {
-        setError('Failed to load reports. Please try again.');
-      }
+      if (e?.status === 0) setError('Unable to connect to the server. Please check your connection.');
+      else if (e?.status === 401) setError('Your session has expired. Please sign in again.');
+      else setError('Failed to load reports. Please try again.');
     } finally {
       setLoading(false);
     }
-  }, [dateRange, orderPage, getErrorMessage]);
+  }, [dateRange, orderPage, activeCategory, getErrorMessage]);
 
-  useEffect(() => { loadReports(); }, [loadReports, refreshTrigger]);
+useEffect(() => { loadReports(); }, [loadReports, refreshTrigger]);
 
   useSocketEvent({ event: 'order:created', handler: () => loadReports() });
   useSocketEvent({ event: 'order:updated', handler: () => loadReports() });
@@ -320,7 +374,7 @@ export default function ReportsPage() {
                   formatCurrency={formatCurrency} formatDate={formatDate} />
               )}
               {activeCategory === 'orders' && (
-                <OrderReports orderReportData={orderReportData} loading={loading}
+                <OrderReports orderReportData={orderReportData} cancellationData={cancellationData} loading={loading}
                   formatCurrency={formatCurrency} formatDate={formatDate} formatTime={formatTime} />
               )}
               {activeCategory === 'payments' && (
@@ -328,7 +382,7 @@ export default function ReportsPage() {
                   formatCurrency={formatCurrency} formatDate={formatDate} formatTime={formatTime} />
               )}
               {activeCategory === 'discounts' && (
-                <DiscountReports discountData={discountData} cancellationData={cancellationData}
+                <DiscountReports discountData={discountData}
                   loading={loading} formatCurrency={formatCurrency} formatDate={formatDate} />
               )}
               {activeCategory === 'kitchen' && (
@@ -348,7 +402,7 @@ export default function ReportsPage() {
                   staffDiscountCancellation={staffDiscountCancellation} loading={loading} formatCurrency={formatCurrency} />
               )}
               {activeCategory === 'management' && (
-                <ManagementReports dailyClosing={dailyClosing} monthlySummary={monthlySummary}
+                <ManagementReports dailyClosing={dailyClosing}
                   restaurantPerformance={restaurantPerformance} loading={loading} formatCurrency={formatCurrency} formatDate={formatDate} dateRange={dateRange} />
               )}
             </div>

@@ -137,7 +137,8 @@ const SUPER_ADMIN_SCREENS = [  'sa_dashboard', 'sa_restaurants', 'sa_subscriptio
 // ── Priority-ordered fallback screens (first enabled module wins) ──
 const FALLBACK_SCREEN_PRIORITY = [
   'dashboard',
-  'order_taking',
+  'new_order',       // Restaurant: TakeOrderWizard (full restaurant order flow)
+  'order_taking',    // Counter/Hybrid: Basic POS (quick billing)
   'active_orders',
   'menu',
   'reports',
@@ -305,6 +306,19 @@ export default function AppShell() {
     restoreSession();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── Global session-expiry handler ──
+  // The API client fires 'pos:session-expired' once when any protected request
+  // returns 401 (stale/invalid token). We log out and land on the login screen
+  // — no infinite retry loop, no repeated /api/auth/login calls.
+  useEffect(() => {
+    const handleSessionExpired = () => {
+      useAuthStore.getState().logout();
+      useUiStore.getState().setScreen('login');
+    };
+    window.addEventListener('pos:session-expired', handleSessionExpired);
+    return () => window.removeEventListener('pos:session-expired', handleSessionExpired);
+  }, []);
+
   // ── After session restored, redirect to role's default screen if still on login ──
   useEffect(() => {
     if (sessionReady && isAuthenticated && user && currentScreen === 'login') {
@@ -331,17 +345,14 @@ export default function AppShell() {
         return;
       }
       // Check business-mode applicability (e.g. POS Ordering blocked in Restaurant mode)
-      // order_taking is allowed in all modes — it's the order-creation screen,
-      // distinct from the POS Ordering sidebar module which is mode-restricted.
-      if (currentScreen !== 'order_taking' && !isScreenAllowedForBusinessMode(currentScreen, settings?.businessMode)) {
+      if (!isScreenAllowedForBusinessMode(currentScreen, settings?.businessMode)) {
         const bestScreen = findBestAvailableScreen(settings, userRole, subscription);
         setScreen(bestScreen);
         return;
       }
       // Check module visibility setting
-      // order_taking bypasses module toggle — it's always available for order creation
       const settingKey = SCREEN_TO_SETTING[currentScreen];
-      if (currentScreen !== 'order_taking' && settingKey && settings[settingKey] === false) {
+      if (settingKey && settings[settingKey] === false) {
         const bestScreen = findBestAvailableScreen(settings, userRole, subscription);
         setScreen(bestScreen);
         return;
@@ -404,14 +415,15 @@ export default function AppShell() {
   // expired_locked is a system screen (not role-gated) — allowed for anyone
   const isScreenAllowed = isSuperAdminRouting || currentScreen === 'expired_locked' || (
     canAccessScreen(userRole, currentScreen) &&
-    // order_taking is allowed in all business modes — it's the order-creation screen,
-    // distinct from the POS Ordering sidebar module which is mode-restricted.
-    (currentScreen === 'order_taking' || isScreenAllowedForBusinessMode(currentScreen, settings?.businessMode))
+    isScreenAllowedForBusinessMode(currentScreen, settings?.businessMode)
   );
+  // Also check module visibility (e.g. order_taking blocked when enablePosOrdering=false)
+  const moduleSettingKey = SCREEN_TO_SETTING[currentScreen];
+  const isModuleEnabled = isSuperAdminRouting || !moduleSettingKey || settings[moduleSettingKey] !== false;
 
-  // If screen is not allowed, show unauthorized page instead
+  // If screen is not allowed or module is disabled, show unauthorized page instead
   // But always allow login screen
-  if (currentScreen !== 'login' && !isScreenAllowed) {
+  if (currentScreen !== 'login' && !(isScreenAllowed && isModuleEnabled)) {
     return (
       <div className="min-h-screen bg-[#F8FAFC] flex select-none font-sans overflow-hidden">
         <Suspense fallback={null}>{isSuperAdmin ? <SuperAdminSidebar /> : <Sidebar />}</Suspense>

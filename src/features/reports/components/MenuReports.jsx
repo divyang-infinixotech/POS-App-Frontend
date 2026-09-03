@@ -4,6 +4,7 @@ import { Package, Trophy, AlertTriangle, BarChart3 } from 'lucide-react';
 import { formatCurrency } from '../../../lib/utils';
 import { PLACEHOLDER_IMAGE } from '../../../lib/imagePlaceholder';
 import ReportExportBar from '../../../components/common/ReportExportBar';
+import { useSettingsStore } from '../../../store';
 
 const chartFont = { family: "'Inter', 'Segoe UI', sans-serif", size: 9 };
 const chartDefaults = { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } };
@@ -12,6 +13,8 @@ export default function MenuReports({ menuPerformance, topSelling, lowSelling, c
   const [subTab, setSubTab] = useState('performance');
   const [sortBy, setSortBy] = useState('quantity');
   const fcVal = fc || formatCurrency;
+  const { settings } = useSettingsStore();
+  const currencySymbol = settings?.currencySymbol || '₹';
 
   if (loading) return null;
 
@@ -171,7 +174,7 @@ export default function MenuReports({ menuPerformance, topSelling, lowSelling, c
               <BarChart3 className="w-3.5 h-3.5 text-amber-600" /> Category Revenue
             </h4>
             <div className="h-48">
-              {catChartData.labels.length > 0 ? <Bar data={catChartData} options={{ ...chartDefaults, scales: { x: { grid: { display: false }, ticks: { font: chartFont } }, y: { beginAtZero: true, ticks: { font: chartFont, callback: v => '₹' + v } } } }} /> :
+              {catChartData.labels.length > 0 ? <Bar data={catChartData} options={{ ...chartDefaults, scales: { x: { grid: { display: false }, ticks: { font: chartFont } }, y: { beginAtZero: true, ticks: { font: chartFont, callback: v => currencySymbol + v } } } }} /> :
                 <div className="h-full flex items-center justify-center text-xs text-slate-400 italic">No data</div>}
             </div>
           </div>

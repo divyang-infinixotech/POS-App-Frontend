@@ -5,10 +5,10 @@ export function cn(...inputs) {
   return twMerge(clsx(inputs));
 }
 
-export const formatCurrency = (amount) => {
+export const formatCurrency = (amount, currencyCode) => {
   return new Intl.NumberFormat('en-IN', {
     style: 'currency',
-    currency: 'INR',
+    currency: currencyCode || 'INR',
     minimumFractionDigits: 0,
     maximumFractionDigits: 2,
   }).format(amount || 0);

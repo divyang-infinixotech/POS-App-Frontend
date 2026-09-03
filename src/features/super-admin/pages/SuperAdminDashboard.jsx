@@ -3,29 +3,23 @@ import { superAdminApi } from '../../../api/superAdmin.api';
 import {
   Building2,
   Users,
-  ShoppingCart,
-  TrendingUp,
-  Clock,
   AlertTriangle,
   CheckCircle2,
   XCircle,
   Plus,
   Loader2,
   Zap,
-  DollarSign,
-  Calendar,
   Activity,
-  ChevronRight,
 } from 'lucide-react';
 
 const KPI_CARDS = [
   { key: 'totalRestaurants', label: 'Total Restaurants', icon: Building2, color: 'emerald', prefix: '' },
   { key: 'activeRestaurants', label: 'Active Restaurants', icon: CheckCircle2, color: 'green', prefix: '' },
   { key: 'trialRestaurants', label: 'Trial Restaurants', icon: Zap, color: 'blue', prefix: '' },
+  // Platform KPIs only — tenant operational metrics (orders, POS revenue,
+  // bills, KOTs…) are never shown to Super Admin.
   { key: 'expiredSubscriptions', label: 'Expired Subscriptions', icon: AlertTriangle, color: 'red', prefix: '' },
-  { key: 'totalUsers', label: 'Total Users', icon: Users, color: 'indigo', prefix: '' },
-  { key: 'todayOrders', label: 'Orders Today', icon: ShoppingCart, color: 'orange', prefix: '' },
-  { key: 'todayRevenue', label: "Today's Revenue", icon: DollarSign, color: 'emerald', prefix: '₹' },
+  { key: 'totalUsers', label: 'Platform Users', icon: Users, color: 'indigo', prefix: '' },
   { key: 'newRestaurantsThisMonth', label: 'New This Month', icon: Plus, color: 'purple', prefix: '' },
   { key: 'onlineRestaurants', label: 'Online Restaurants', icon: Activity, color: 'green', prefix: '' },
   { key: 'offlineRestaurants', label: 'Offline Restaurants', icon: XCircle, color: 'slate', prefix: '' },

@@ -8,7 +8,7 @@ const chartFont = { family: "'Inter', 'Segoe UI', sans-serif", size: 9 };
 const chartDefaults = { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { titleFont: chartFont, bodyFont: { ...chartFont, size: 10 } } } };
 const STATUS_COLORS = { COMPLETED: '#16A34A', PREPARING: '#2563EB', READY: '#D97706', PENDING: '#64748B', CANCELLED: '#DC2626' };
 
-export default function OrderReports({ orderReportData, loading, formatCurrency: fc, formatDate: fd, formatTime: ft }) {
+export default function OrderReports({ orderReportData, cancellationData, loading, formatCurrency: fc, formatDate: fd, formatTime: ft }) {
   const [subTab, setSubTab] = useState('register');
   const [orderPage, setOrderPage] = useState(1);
   const orderPageSize = 10;
@@ -27,6 +27,8 @@ export default function OrderReports({ orderReportData, loading, formatCurrency:
 
   const summary = orderReportData?.summary || {};
   const orders = orderReportData?.orders || [];
+  const cancellationSummary = cancellationData?.summary || {};
+  const cancellationOrders = cancellationData?.orders || [];
 
   const orderStatusSummary = useMemo(() => ({
     COMPLETED: summary.completedCount || 0,
@@ -47,9 +49,9 @@ export default function OrderReports({ orderReportData, loading, formatCurrency:
   const filteredOrders = useMemo(() => {
     if (subTab === 'completed') return orders.filter(o => o.status === 'COMPLETED');
     if (subTab === 'pending') return orders.filter(o => ['PENDING', 'PREPARING', 'READY'].includes(o.status));
-    if (subTab === 'cancelled') return orders.filter(o => o.status === 'CANCELLED');
+    if (subTab === 'cancelled') return cancellationOrders; // Use dedicated cancellation report data
     return orders; // 'register' shows all
-  }, [orders, subTab]);
+  }, [orders, cancellationOrders, subTab]);
 
   // Order Type aggregation
   const orderTypeData = useMemo(() => {

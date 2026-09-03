@@ -1,20 +1,21 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
-  Check, Printer, X, Percent, Wallet, CreditCard, Smartphone,
-  Building2, Landmark, SplitSquareVertical, RotateCcw,
+  Check, Printer, X, Percent, CreditCard, Smartphone,
+  SplitSquareVertical, RotateCcw,
   Mail, ChevronLeft, Loader2, AlertTriangle, FileText, Search, ChevronRight, Pencil,
 } from 'lucide-react';
 import { useCartStore, useUiStore, useSettingsStore, useAuthStore } from '../../../store';
 import { orderApi } from '../../../api/order.api';
 import { paymentApi } from '../../../api/payment.api';
+import { billApi } from '../../../api/bill.api';
 import { openBillPrintPreview } from '../../../services/printService';
 
 const PAYMENT_METHODS = [
-  { key: 'CASH', label: 'Cash', icon: Wallet, color: 'emerald' },
+  { key: 'CASH', label: 'Cash', icon: () => (
+    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M12 4v16"/><circle cx="12" cy="12" r="3"/></svg>
+  ), color: 'emerald' },
   { key: 'CARD', label: 'Card', icon: CreditCard, color: 'blue' },
   { key: 'UPI', label: 'UPI', icon: Smartphone, color: 'purple' },
-  { key: 'WALLET', label: 'Wallet', icon: Building2, color: 'amber' },
-  { key: 'BANK_TRANSFER', label: 'Bank Transfer', icon: Landmark, color: 'slate' },
 ];
 
 const QUICK_AMOUNTS = [100, 200, 500, 1000, 2000];
@@ -680,7 +681,7 @@ function SuccessScreen({ bill, currency, cashReceived, onPrint, onReprint, onEma
   const change = cashEntered > grandTotal ? cashEntered - grandTotal : 0;
 
   const methodName = (m) => ({
-    CASH: 'Cash', CARD: 'Card', UPI: 'UPI', WALLET: 'Wallet', BANK_TRANSFER: 'Bank Transfer',
+    CASH: 'Cash', CARD: 'Card', UPI: 'UPI',
   }[m] || m || '—');
   const methodChip = payments.length > 1
     ? `Split · ${payments.map((p) => methodName(p.paymentMethod)).join(' + ')}`
@@ -846,7 +847,7 @@ export default function BillingPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
 
-  const currency = '₹';
+  const currency = settings?.currencySymbol || '₹';
 
   // ── Fetch order from backend on mount ──
   useEffect(() => {
@@ -867,7 +868,7 @@ export default function BillingPage() {
         setServiceCharge(Number(resp.data.serviceCharge) || 0);
       }
     } catch (e) {
-      console.error('Failed to load order:', e);
+      // Expected: order not found in backend, falling back to local store
       // Fallback to local store
       const localOrder = orders.find((o) => o.id === checkoutOrderId);
       if (localOrder) {
@@ -962,47 +963,34 @@ export default function BillingPage() {
       });
 
       if (result) {
-        setBillData(result);
+        // The result may be a full bill response or an { alreadyPaid, bill, payments } wrapper
+        const billPayload = result.alreadyPaid ? result.bill : result;
+        const paymentsList = result.payments || billPayload?.payments || [];
+        const isAlreadyPaid = !!result.alreadyPaid;
+
+        setBillData(billPayload);
         setSuccess(true);
         incrementRefreshTrigger();
-        addToast(`Payment collected successfully! Bill #${result.billNo || result.id}`, 'success');
+
+        if (isAlreadyPaid) {
+          addToast(`Bill #${billPayload.billNo || billPayload.id} was already paid.`, 'info');
+        } else {
+          addToast(`Payment collected successfully! Bill #${billPayload.billNo || billPayload.id}`, 'success');
+        }
 
         // Auto-print if enabled
         try {
-          await paymentApi.markPrinted(result.id || result.bill?.id);
+          const billId = billPayload?.id || billPayload?.bill?.id;
+          if (billId) {
+            await paymentApi.markPrinted(billId);
+          }
           if (settings?.autoPrintBill) {
             // Use the server-returned bill so the printed receipt always matches
             // the persisted database values (never a stale frontend total).
-            const items = orderDetails?.orderItems || orderDetails?.items || [];
-            openBillPrintPreview({
-              restaurantName: settings?.branding?.restaurantName || '',
-              address: settings?.address || '',
-              phone: settings?.contactNumber || '',
-              email: settings?.email || '',
-              gstNumber: settings?.gstNumber || '',
-              fssaiNumber: settings?.fssaiNumber || '',
-              logo: settings?.branding?.logo || '',
-              receiptFooter: settings?.receiptFooterMessage || 'Thank you for your business!',
-              billNo: result.billNo || String(result.id),
-              orderNo: orderDetails?.orderNo || '',
-              tableNo: orderDetails?.table?.tableNo || '',
-              orderType: orderDetails?.orderType || 'DINE_IN',
-              customerName: orderDetails?.customer?.name || '',
-              date: new Date(),
-              items: items,
-              subtotal: result.subtotal ?? (orderDetails?.subtotal || 0),
-              discount: result.discount ?? discountAmount,
-              discountType: result.discountType || discountType || '',
-              discountValue: result.discountValue ?? (discountType ? Number(discountValue) : 0),
-              serviceCharge: result.serviceCharge ?? serviceCharge,
-              taxAmount: result.taxAmount ?? (orderDetails?.taxAmount || 0),
-              roundOff: result.roundOff ?? (roundOff || 0),
-              grandTotal: result.grandTotal ?? grandTotal,
-              paidAmount: result.paidAmount ?? grandTotal,
-              balanceAmount: result.balanceAmount ?? 0,
-              payments: result.payments || [],
-              paperSize: '80mm'
-            });
+            openBillPrintPreview(buildPrintData(
+              billPayload,
+              orderDetails
+            ));
           }
         } catch (printErr) {
           // Non-critical
@@ -1018,50 +1006,125 @@ export default function BillingPage() {
     }
   };
 
+  // ── Helper: build normalized print data from billData + orderDetails ──
+  // Single source of truth for all bill printing. Uses server values when
+  // available (authoritative) and falls back to frontend computations.
+  const buildPrintData = (bill, order) => {
+    const items = order?.orderItems || order?.items || [];
+    const billId = bill?.id || bill?.bill?.id;
+    const src = bill?.billNo ? bill : (bill?.bill || bill || {});
+    // ── Restaurant identity resolution chain ──
+    // 1. Bill/order response restaurant identity (if backend returned it)
+    // 2. Authenticated tenant settings (frontend store)
+    // 3. Empty string fallback — printService will use 'Restaurant' as last resort
+    const billIdentity = bill?.restaurant || {};
+    const resolveIdentity = (billField, settingsFallback) => {
+      // Priority: bill response > settings store > empty string
+      // settingsFallback is a function that extracts the value from settings
+      const billVal = billIdentity[billField];
+      const settingsVal = settingsFallback();
+      if (billVal != null && billVal !== '') return billVal;
+      if (settingsVal != null && settingsVal !== '') return settingsVal;
+      if (billVal != null) return billVal;
+      if (settingsVal != null) return settingsVal;
+      return '';
+    };
+    return {
+      // Restaurant identity: resolved from bill response or settings store
+      restaurantName: resolveIdentity('restaurantName', () => settings?.branding?.restaurantName),
+      address: resolveIdentity('address', () => settings?.address),
+      phone: resolveIdentity('phone', () => settings?.contactNumber),
+      email: resolveIdentity('email', () => settings?.email),
+      gstNumber: resolveIdentity('gstNumber', () => settings?.gstNumber),
+      fssaiNumber: resolveIdentity('fssaiNumber', () => settings?.fssaiNumber),
+      logo: resolveIdentity('logo', () => settings?.branding?.logo),
+      receiptFooter: resolveIdentity('receiptFooter', () => settings?.receiptFooterMessage),
+      // Bill identifiers
+      billNo: src.billNo || String(billId || ''),
+      orderNo: order?.orderNo || String(order?.id || ''),
+      tableNo: order?.table?.tableNo || '',
+      orderType: order?.orderType || 'DINE_IN',
+      customerName: order?.customer?.name || '',
+      staffName: user?.name || '',
+      status: src.status || '',
+      // Items (from order, authoritative)
+      items,
+      // Financial values (server bill is authoritative, frontend is fallback)
+      subtotal: Number(src.subtotal ?? order?.subtotal ?? 0),
+      discount: Number(src.discount ?? discountAmount),
+      discountType: src.discountType || discountType || '',
+      discountValue: src.discountValue ?? (discountType ? Number(discountValue) : 0),
+      serviceCharge: Number(src.serviceCharge ?? serviceCharge),
+      taxAmount: Number(src.taxAmount ?? order?.taxAmount ?? 0),
+      roundOff: Number(src.roundOff ?? roundOff ?? 0),
+      grandTotal: Number(src.grandTotal ?? grandTotal),
+      paidAmount: Number(src.paidAmount ?? src.grandTotal ?? grandTotal),
+      balanceAmount: Number(src.balanceAmount ?? 0),
+      payments: bill?.payments || src.payments || [],
+      date: src.createdAt || new Date(),
+      paperSize: '80mm',
+    };
+  };
+
+  // ── Helper: fetch bill from backend if local data is insufficient ──
+  const ensureBillData = async (billId) => {
+    if (!billId) return null;
+    // Try to fetch from backend for the most up-to-date bill data
+    try {
+      const billResp = await billApi.getById(billId);
+      if (billResp?.success && billResp?.data) {
+        return billResp.data;
+      }
+    } catch (e) {
+      // Expected: bill fetch failed, will try alternate lookup
+    }
+    return null;
+  };
+
   // ── Receipt Actions ──
   const handlePrint = async () => {
-    const billId = billData?.id || billData?.bill?.id;
+    let billId = billData?.id || billData?.bill?.id;
+    let currentBillData = billData;
+    let currentOrderDetails = orderDetails;
+
+    // If bill data is missing, try to fetch it from backend
+    if (!billId || !currentBillData) {
+      if (checkoutOrderId) {
+        currentBillData = await ensureBillData(null);
+        // Try to find bill by order ID
+        try {
+          const billsResp = await billApi.getAll();
+          if (billsResp?.success && billsResp?.data) {
+            const bills = Array.isArray(billsResp.data) ? billsResp.data : [];
+            const foundBill = bills.find(b => b.orderId === checkoutOrderId || b.order?.id === checkoutOrderId);
+            if (foundBill) {
+              currentBillData = foundBill;
+              billId = foundBill.id;
+            }
+          }
+        } catch (e) {
+          // Expected: bill search failed, continuing with available data
+        }
+      }
+    }
+
     if (!billId) {
-      addToast('No bill data available for printing.', 'warning');
+      addToast('No bill data available for printing. Please try again.', 'warning');
       return;
     }
     try {
       // Mark as printed in backend
       await paymentApi.markPrinted(billId);
       
-      // Actually open print preview with bill data
-      if (billData && orderDetails) {
-        const items = orderDetails.orderItems || orderDetails.items || [];
-        openBillPrintPreview({
-          restaurantName: settings?.branding?.restaurantName || '',
-          address: settings?.address || '',
-          phone: settings?.contactNumber || '',
-          email: settings?.email || '',
-          gstNumber: settings?.gstNumber || '',
-          fssaiNumber: settings?.fssaiNumber || '',
-          logo: settings?.branding?.logo || '',
-          receiptFooter: settings?.receiptFooterMessage || 'Thank you for your business!',
-          billNo: billData.billNo || String(billId),
-          orderNo: orderDetails.orderNo || String(orderDetails.id),
-          tableNo: orderDetails.table?.tableNo || '',
-          orderType: orderDetails.orderType || 'DINE_IN',
-          customerName: orderDetails.customer?.name || '',
-          date: new Date(),
-          items: items,
-          subtotal: billData.subtotal ?? (orderDetails.subtotal || 0),
-          discount: billData.discount ?? discountAmount,
-          discountType: billData.discountType || discountType || '',
-          discountValue: billData.discountValue ?? (discountType ? Number(discountValue) : 0),
-          serviceCharge: billData.serviceCharge ?? serviceCharge,
-          taxAmount: billData.taxAmount ?? (orderDetails.taxAmount || 0),
-          roundOff: billData.roundOff ?? (roundOff || 0),
-          grandTotal: billData.grandTotal ?? grandTotal,
-          paidAmount: billData.paidAmount ?? billData.grandTotal ?? grandTotal,
-          balanceAmount: billData.balanceAmount ?? 0,
-          payments: billData.payments || [],
-          paperSize: '80mm'
-        });
-        addToast(`Bill #${billData.billNo || billId} printed successfully!`, 'success');
+      // Use available bill data for print
+      if (currentBillData && currentOrderDetails) {
+        openBillPrintPreview(buildPrintData(currentBillData, currentOrderDetails));
+        addToast(`Bill #${currentBillData.billNo || billId} printed successfully!`, 'success');
+      } else if (currentBillData) {
+        // Use bill data alone (order data may be embedded)
+        const embeddedOrder = currentBillData.order || {};
+        openBillPrintPreview(buildPrintData(currentBillData, embeddedOrder));
+        addToast(`Bill #${currentBillData.billNo || billId} printed successfully!`, 'success');
       } else {
         addToast('Bill data not available for print preview.', 'warning');
       }
@@ -1071,48 +1134,45 @@ export default function BillingPage() {
   };
 
   const handleReprint = async () => {
-    const billId = billData?.id || billData?.bill?.id;
+    let billId = billData?.id || billData?.bill?.id;
+    let currentBillData = billData;
+    let currentOrderDetails = orderDetails;
+
+    // If bill data is missing, try to fetch it from backend
+    if (!billId || !currentBillData) {
+      if (checkoutOrderId) {
+        try {
+          const billsResp = await billApi.getAll();
+          if (billsResp?.success && billsResp?.data) {
+            const bills = Array.isArray(billsResp.data) ? billsResp.data : [];
+            const foundBill = bills.find(b => b.orderId === checkoutOrderId || b.order?.id === checkoutOrderId);
+            if (foundBill) {
+              currentBillData = foundBill;
+              billId = foundBill.id;
+            }
+          }
+        } catch (e) {
+          // Expected: bill search failed, continuing with available data
+        }
+      }
+    }
+
     if (!billId) {
-      addToast('No bill data available for reprinting.', 'warning');
+      addToast('No bill data available for reprinting. Please try again.', 'warning');
       return;
     }
     try {
       // Mark as reprint in backend
       await paymentApi.reprint(billId);
       
-      // Actually open print preview with bill data
-      if (billData && orderDetails) {
-        const items = orderDetails.orderItems || orderDetails.items || [];
-        openBillPrintPreview({
-          restaurantName: settings?.branding?.restaurantName || '',
-          address: settings?.address || '',
-          phone: settings?.contactNumber || '',
-          email: settings?.email || '',
-          gstNumber: settings?.gstNumber || '',
-          fssaiNumber: settings?.fssaiNumber || '',
-          logo: settings?.branding?.logo || '',
-          receiptFooter: settings?.receiptFooterMessage || 'Thank you for your business!',
-          billNo: billData.billNo || String(billId),
-          orderNo: orderDetails.orderNo || String(orderDetails.id),
-          tableNo: orderDetails.table?.tableNo || '',
-          orderType: orderDetails.orderType || 'DINE_IN',
-          customerName: orderDetails.customer?.name || '',
-          date: new Date(),
-          items: items,
-          subtotal: billData.subtotal ?? (orderDetails.subtotal || 0),
-          discount: billData.discount ?? discountAmount,
-          discountType: billData.discountType || discountType || '',
-          discountValue: billData.discountValue ?? (discountType ? Number(discountValue) : 0),
-          serviceCharge: billData.serviceCharge ?? serviceCharge,
-          taxAmount: billData.taxAmount ?? (orderDetails.taxAmount || 0),
-          roundOff: billData.roundOff ?? (roundOff || 0),
-          grandTotal: billData.grandTotal ?? grandTotal,
-          paidAmount: billData.paidAmount ?? billData.grandTotal ?? grandTotal,
-          balanceAmount: billData.balanceAmount ?? 0,
-          payments: billData.payments || [],
-          paperSize: '80mm'
-        });
-        addToast(`Bill #${billData.billNo || billId} reprinted successfully!`, 'success');
+      // Use available bill data for print
+      if (currentBillData && currentOrderDetails) {
+        openBillPrintPreview(buildPrintData(currentBillData, currentOrderDetails));
+        addToast(`Bill #${currentBillData.billNo || billId} reprinted successfully!`, 'success');
+      } else if (currentBillData) {
+        const embeddedOrder = currentBillData.order || {};
+        openBillPrintPreview(buildPrintData(currentBillData, embeddedOrder));
+        addToast(`Bill #${currentBillData.billNo || billId} reprinted successfully!`, 'success');
       } else {
         addToast('Bill data not available for print preview.', 'warning');
       }
@@ -1517,32 +1577,6 @@ export default function BillingPage() {
               currency={currency}
               grandTotal={grandTotal}
             />
-          )}
-
-          {activeTab === 'WALLET' && (
-            <div className="flex flex-col items-center justify-center py-8 text-center gap-3">
-              <Building2 className="w-12 h-12 text-amber-500" />
-              <p className="text-xs font-bold text-slate-700">Wallet Payment</p>
-              <p className="text-[10px] text-slate-400">
-                Amount: {currency}{grandTotal.toFixed(2)}
-              </p>
-              <p className="text-[9px] text-slate-400 italic">
-                Wallet will be applied to the full amount on collect.
-              </p>
-            </div>
-          )}
-
-          {activeTab === 'BANK_TRANSFER' && (
-            <div className="flex flex-col items-center justify-center py-8 text-center gap-3">
-              <Landmark className="w-12 h-12 text-slate-500" />
-              <p className="text-xs font-bold text-slate-700">Bank Transfer</p>
-              <p className="text-[10px] text-slate-400">
-                Amount: {currency}{grandTotal.toFixed(2)}
-              </p>
-              <p className="text-[9px] text-slate-400 italic">
-                Transfer to restaurant account, then collect.
-              </p>
-            </div>
           )}
 
           {settings?.enableSplitBill !== false && activeTab === 'SPLIT' && (

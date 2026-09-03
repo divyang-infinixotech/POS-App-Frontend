@@ -99,6 +99,26 @@ apiClient.interceptors.response.use(
       return new Promise(() => {}); // Never resolve — swallow silently
     }
 
+    // ── Expired / invalid session (401) ────────────────────────────────────
+    // A 401 on any NON-login endpoint means the stored token is expired,
+    // invalid, or was invalidated server-side (e.g. password changed).
+    // Clear the invalid session EXACTLY ONCE and let the app shell redirect
+    // to Login. We never auto-retry a known-401 request, so an expired token
+    // can never spin an infinite 401/retry loop. Failed /auth/login attempts
+    // (wrong credentials) are handled by the LoginPage and excluded here.
+    if (
+      error.response?.status === 401 &&
+      !String(error.config?.url || '').includes('/auth/login')
+    ) {
+      const hadToken = !!localStorage.getItem('pos_token');
+      if (hadToken) {
+        localStorage.removeItem('pos_token');
+        localStorage.removeItem('pos_user');
+        // Tell the app shell to log out + show the login screen.
+        window.dispatchEvent(new CustomEvent('pos:session-expired'));
+      }
+    }
+
     // ── Error message extraction ──────────────────────────────────────────
     if (error.code === 'ECONNABORTED') {
       error.message = 'Request timed out. Please try again.';

@@ -30,7 +30,7 @@ function KpiCard({ label, value, color, icon: Icon }) {
   );
 }
 
-export default function ManagementReports({ dailyClosing, monthlySummary, restaurantPerformance, loading, formatCurrency: fc, formatDate: fd, dateRange }) {
+export default function ManagementReports({ dailyClosing, restaurantPerformance, loading, formatCurrency: fc, formatDate: fd, dateRange }) {
   const [subTab, setSubTab] = useState('dailyClosing');
   const fcVal = fc || formatCurrency;
   const fdVal = fd || formatDate;
@@ -44,22 +44,11 @@ export default function ManagementReports({ dailyClosing, monthlySummary, restau
   const dcKitchen = dc.kitchen || {};
   const dcTopItems = dc.topItems || [];
 
-  const ms = monthlySummary || {};
-  const msSummary = ms.summary || {};
-  const msTopItems = ms.topItems || [];
-  const msTopCats = ms.topCategories || [];
-  const msHourly = ms.hourlyDistribution || [];
-
   const perf = restaurantPerformance || {};
   const perfHourly = (perf.hourlySales?.hours || []);
   const perfCancellation = perf.cancellation || {};
   const perfCancellationSummary = perfCancellation.summary || {};
   const perfCategoryPerformance = perf.categoryPerformance || [];
-
-  const hourlyData = {
-    labels: msHourly.map(h => h.label),
-    datasets: [{ label: 'Sales', data: msHourly.map(h => h.sales), backgroundColor: msHourly.map(h => h.sales > 0 ? 'rgba(22,163,74,0.7)' : 'rgba(226,232,240,0.3)'), borderRadius: 4, borderSkipped: false }],
-  };
 
   const perfHourlyData = {
     labels: perfHourly.map(h => h.label),
@@ -67,13 +56,13 @@ export default function ManagementReports({ dailyClosing, monthlySummary, restau
   };
 
   const hasDailyData = dc.date || dcRevenue.grossSales > 0 || dcOrders.total > 0;
-  const hasMonthlyData = msSummary.totalSales > 0 || msSummary.totalOrders > 0;
+  
   const hasPerfData = perfHourly.length > 0 || perfCategoryPerformance.length > 0;
 
   return (
     <div className="space-y-4">
       <div className="flex bg-slate-100 p-0.5 rounded-lg border border-slate-200 text-[10px] font-bold overflow-x-auto no-scrollbar">
-        {[{ key: 'dailyClosing', label: 'Daily Closing' }, { key: 'monthly', label: 'Monthly Summary' }, { key: 'performance', label: 'Performance' }].map(t => (
+        {[{ key: 'dailyClosing', label: 'Daily Closing' }, { key: 'performance', label: 'Performance' }].map(t => (
           <button key={t.key} onClick={() => setSubTab(t.key)}
             className={`px-3 py-1.5 rounded-md transition-all cursor-pointer shrink-0 ${subTab === t.key ? 'bg-white text-slate-800 shadow-xs' : 'text-slate-500 hover:text-slate-700'}`}>
             {t.label}
@@ -166,79 +155,7 @@ export default function ManagementReports({ dailyClosing, monthlySummary, restau
         </div>
       )}
 
-      {subTab === 'monthly' && (
-        <div className="space-y-4">
-          {!hasMonthlyData ? (
-            <EmptyState message="No monthly summary data available for the selected period." />
-          ) : (
-            <>
-              <div className="flex justify-end">
-                <ReportExportBar title="Monthly Management Summary" columns={[{ key: 'metric', label: 'Metric' }, { key: 'value', label: 'Value' }]} data={[{ metric: 'Total Sales', value: fcVal(msSummary.totalSales || 0) }, { metric: 'Total Orders', value: msSummary.totalOrders || 0 }, { metric: 'Items Sold', value: msSummary.totalItemsSold || 0 }, { metric: 'Avg Order Value', value: fcVal(msSummary.averageOrderValue || 0) }, { metric: 'Total Discount', value: fcVal(msSummary.totalDiscount || 0) }, { metric: 'Cancelled', value: msSummary.cancelledOrders || 0 }]} dateRange={dateRange} />
-              </div>
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-                {[
-                  { label: 'Total Sales', value: fcVal(msSummary.totalSales || 0), color: 'emerald' },
-                  { label: 'Total Orders', value: msSummary.totalOrders || 0, color: 'blue' },
-                  { label: 'Items Sold', value: msSummary.totalItemsSold || 0, color: 'orange' },
-                  { label: 'Avg Order Value', value: fcVal(msSummary.averageOrderValue || 0), color: 'purple' },
-                  { label: 'Total Discount', value: fcVal(msSummary.totalDiscount || 0), color: 'red' },
-                  { label: 'Cancelled', value: msSummary.cancelledOrders || 0, color: 'red' },
-                ].map((kpi, idx) => (
-                  <div key={idx} className={`bg-white rounded-[18px] border border-${kpi.color}-200 p-4 shadow-xs`}>
-                    <p className="text-[9px] font-bold uppercase text-slate-500 tracking-wider mb-2">{kpi.label}</p>
-                    <p className={`text-lg font-extrabold text-${kpi.color}-600`}>{kpi.value}</p>
-                  </div>
-                ))}
-              </div>
-
-              {msHourly.length > 0 && (
-                <div className="bg-white rounded-[18px] border border-slate-200 p-4 shadow-xs">
-                  <h4 className="text-[10px] font-extrabold text-slate-800 uppercase tracking-wider mb-3">Hourly Sales Distribution</h4>
-                  <div className="h-48"><Bar data={hourlyData} options={{ ...chartDefaults, scales: { x: { grid: { display: false }, ticks: { font: { ...chartFont, size: 7 }, maxTicksLimit: 12 } }, y: { beginAtZero: true, ticks: { font: chartFont, callback: v => fcVal(v) } } } }} /></div>
-                </div>
-              )}
-
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                {msTopItems.length > 0 && (
-                  <div className="bg-white rounded-[18px] border border-slate-200 p-4 shadow-xs">
-                    <h4 className="text-[10px] font-extrabold text-slate-800 uppercase tracking-wider mb-3">Top Items</h4>
-                    <div className="space-y-1.5">
-                      {msTopItems.slice(0, 5).map((item, i) => (
-                        <div key={i} className="flex items-center justify-between bg-slate-50 rounded-lg p-2 border border-slate-100">
-                          <div className="flex items-center gap-2">
-                            <span className="text-[9px] font-bold text-slate-400 w-4">{i + 1}.</span>
-                            <span className="text-[10px] font-bold text-slate-700">{item.name}</span>
-                          </div>
-                          <div className="flex items-center gap-3">
-                            <span className="text-[9px] font-mono text-slate-500">{item.quantity} sold</span>
-                            <span className="text-[10px] font-mono font-bold text-slate-800">{fcVal(item.revenue)}</span>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                {msTopCats.length > 0 && (
-                  <div className="bg-white rounded-[18px] border border-slate-200 p-4 shadow-xs">
-                    <h4 className="text-[10px] font-extrabold text-slate-800 uppercase tracking-wider mb-3">Top Categories</h4>
-                    <div className="space-y-1.5">
-                      {msTopCats.slice(0, 5).map((cat, i) => (
-                        <div key={i} className="flex items-center justify-between bg-slate-50 rounded-lg p-2 border border-slate-100">
-                          <span className="text-[10px] font-bold text-slate-700">{cat.name}</span>
-                          <div className="flex items-center gap-3">
-                            <span className="text-[9px] font-mono text-slate-500">{cat.quantity} items</span>
-                            <span className="text-[10px] font-mono font-bold text-slate-800">{fcVal(cat.revenue)}</span>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            </>
-          )}
-        </div>
-      )}
+      
 
       {subTab === 'performance' && (
         <div className="space-y-4">
@@ -251,13 +168,13 @@ export default function ManagementReports({ dailyClosing, monthlySummary, restau
                   <h4 className="text-[10px] font-extrabold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
                     <TrendingUp className="w-3.5 h-3.5 text-[#16A34A]" /> Restaurant Performance Overview
                   </h4>
-                  <ReportExportBar title="Restaurant Performance" columns={[{ key: 'metric', label: 'Metric' }, { key: 'value', label: 'Value' }]} data={[{ metric: 'Total Sales', value: fcVal(msSummary.totalSales || 0) }, { metric: 'Total Orders', value: msSummary.totalOrders || 0 }, { metric: 'Items Sold', value: msSummary.totalItemsSold || 0 }]} dateRange={dateRange} />
+                  <ReportExportBar title="Restaurant Performance" columns={[{ key: 'metric', label: 'Metric' }, { key: 'value', label: 'Value' }]} data={[{ metric: 'Total Sales', value: fcVal(perf.totalSales || perf.summary?.totalSales || 0) }, { metric: 'Total Orders', value: perf.totalOrders || perf.summary?.totalOrders || 0 }, { metric: 'Items Sold', value: perf.totalItemsSold || perf.summary?.totalItemsSold || 0 }]} dateRange={dateRange} />
                 </div>
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                  <KpiCard label="Total Sales" value={fcVal(msSummary.totalSales || 0)} color="emerald" icon={DollarSign} />
-                  <KpiCard label="Total Orders" value={msSummary.totalOrders || 0} color="blue" icon={ShoppingBag} />
-                  <KpiCard label="Items Sold" value={msSummary.totalItemsSold || 0} color="orange" icon={Package} />
-                  <KpiCard label="AOV" value={fcVal(msSummary.averageOrderValue || 0)} color="purple" icon={TrendingUp} />
+                  <KpiCard label="Total Sales" value={fcVal(perf.totalSales || perf.summary?.totalSales || 0)} color="emerald" icon={DollarSign} />
+                  <KpiCard label="Total Orders" value={perf.totalOrders || perf.summary?.totalOrders || 0} color="blue" icon={ShoppingBag} />
+                  <KpiCard label="Items Sold" value={perf.totalItemsSold || perf.summary?.totalItemsSold || 0} color="orange" icon={Package} />
+                  <KpiCard label="AOV" value={fcVal(perf.averageOrderValue || perf.summary?.averageOrderValue || 0)} color="purple" icon={TrendingUp} />
                 </div>
               </div>
 

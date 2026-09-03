@@ -21,8 +21,7 @@ const BUSINESS_MODE_PRESETS = {
       enableMenu: true,
       enableReports: true,
       enableBilling: true,
-      // POS Ordering is a counter/hybrid workflow — never in Restaurant mode.
-      enablePosOrdering: false,
+      // POS Ordering works in ALL modes — controlled by enablePosOrdering toggle
     },
   },
   counter: {
@@ -36,7 +35,6 @@ const BUSINESS_MODE_PRESETS = {
       enableMenu: true,
       enableReports: true,
       enableBilling: true,
-      enablePosOrdering: true,
     },
   },
   hybrid: {
@@ -50,7 +48,6 @@ const BUSINESS_MODE_PRESETS = {
       enableMenu: true,
       enableReports: true,
       enableBilling: true,
-      enablePosOrdering: true,
     },
   },
 };
@@ -344,11 +341,31 @@ const useSettingsStore = create((set, get) => ({
           newSettings.currencySymbol = getCurrencySymbol(newSettings.currency);
 
           // ── Business-mode normalization ──
-          // Restaurant mode never uses POS Ordering — the business mode is the
-          // source of truth for screen applicability, so this also corrects
+          // Apply business-mode module presets to ensure module visibility
+          // is consistent with the effective business mode. This corrects
           // legacy rows saved before the mode rule existed.
-          if (newSettings.businessMode === 'restaurant') {
-            newSettings.enablePosOrdering = false;
+          const effectiveMode = newSettings.businessMode || 'restaurant';
+          const preset = BUSINESS_MODE_PRESETS[effectiveMode];
+          if (preset) {
+            Object.keys(preset.settings).forEach((key) => {
+              // Only apply preset if the backend didn't explicitly return a value
+              // (backend value is authoritative when present)
+              if (s[key] === null || s[key] === undefined) {
+                newSettings[key] = preset.settings[key];
+              }
+            });
+            // These are ALWAYS enforced by business mode (not user-toggleable per-module):
+            if (effectiveMode === 'restaurant') {
+              newSettings.enableCounterSale = false;
+            } else if (effectiveMode === 'counter') {
+              newSettings.enableCounterSale = true;
+              // Counter mode MUST NOT have restaurant-specific modules.
+              // These toggles are hidden from the Settings UI in counter mode,
+              // so they should always be OFF regardless of stale backend values.
+              newSettings.enableKitchen = false;
+              newSettings.enableFloorManagement = false;
+              newSettings.enableActiveOrders = false;
+            }
           }
 
           return { settings: newSettings, loading: false, lastFetched: Date.now() };

@@ -31,17 +31,27 @@ const navItemsBase = [
 ];
 
 /**
- * Determine the order-creation sidebar item based on the current business mode.
+ * Determine the order-creation sidebar item based on the current settings.
  *
- * Restaurant → "New Order" (full-page TakeOrderWizard)
- * Counter / Hybrid → "POS Ordering" (existing POS screen)
+ * POS Ordering toggle ON (any mode) → "POS Ordering"
+ * POS Ordering toggle OFF + Restaurant mode → "New Order" (TakeOrderWizard)
+ * POS Ordering toggle OFF + Basic POS → null (no order creation item)
  */
-function getOrderNavItem(businessMode) {
+function getOrderNavItem(businessMode, enablePosOrdering) {
+  if (enablePosOrdering) {
+    // Restaurant mode: POS Ordering opens the TakeOrderWizard (full restaurant flow)
+    if (businessMode === 'restaurant') {
+      return { screen: 'new_order', label: 'POS Ordering', icon: ShoppingCart, setting: 'enablePosOrdering' };
+    }
+    // Counter/Hybrid mode: POS Ordering opens Basic POS (quick billing)
+    return { screen: 'order_taking', label: 'POS Ordering', icon: ShoppingCart, setting: 'enablePosOrdering' };
+  }
+  // POS Ordering is OFF
   if (businessMode === 'restaurant') {
     return { screen: 'new_order', label: 'New Order', icon: ShoppingCart };
   }
-  // Counter / Hybrid: show the existing POS Ordering entry
-  return { screen: 'order_taking', label: 'POS Ordering', icon: ShoppingCart, setting: 'enablePosOrdering' };
+  // Basic POS with POS Ordering OFF — no order creation sidebar item
+  return null;
 }
 
 export default function Sidebar() {
@@ -66,9 +76,10 @@ export default function Sidebar() {
     (typeof subscription?.daysRemaining === 'number' && subscription.daysRemaining <= 0);
 
   // Build the full nav list: Dashboard → order-creation item (mode-dependent) → rest
+  const orderNav = getOrderNavItem(settings?.businessMode, settings?.enablePosOrdering);
   const navItems = [
     { screen: 'dashboard', label: 'Dashboard Overview', icon: LayoutDashboard },
-    getOrderNavItem(settings?.businessMode),
+    ...(orderNav ? [orderNav] : []),
     ...navItemsBase,
   ];
 

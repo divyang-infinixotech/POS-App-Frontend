@@ -9,6 +9,7 @@ import {
   ChevronDown, ChevronUp,
 } from 'lucide-react';
 import ReportExportBar from '../../../components/common/ReportExportBar';
+import { useSettingsStore } from '../../../store';
 
 const chartFont = { family: "'Inter', 'Segoe UI', sans-serif", size: 9 };
 const chartDefaults = {
@@ -29,7 +30,9 @@ export default function SalesReports({
   const [itemPage, setItemPage] = useState(1);
   const [catChartMetric, setCatChartMetric] = useState('revenue');
   const [itemChartMetric, setItemChartMetric] = useState('quantity');
-  const [comparisonPeriod, setComparisonPeriod] = useState('lastMonth');
+
+  const { settings } = useSettingsStore();
+  const currencySymbol = settings?.currencySymbol || '₹';
   const [currentPage, setCurrentPage] = useState(1);
   const pageSize = 8;
   const itemPageSize = 8;
@@ -44,7 +47,6 @@ export default function SalesReports({
     { key: 'items', label: 'Item-wise' },
     { key: 'categories', label: 'Category-wise' },
     { key: 'hourly', label: 'Hourly Sales' },
-    { key: 'comparison', label: 'Comparison' },
   ];
 
   // ── KPIs ──
@@ -59,22 +61,22 @@ export default function SalesReports({
 
   const paymentSummary = useMemo(() => {
     const ps = salesData?.paymentSummary || {};
-    const known = { cash: ps.CASH || 0, card: ps.CARD || 0, upi: ps.UPI || 0, wallet: ps.WALLET || 0 };
+    const known = { cash: ps.CASH || 0, card: ps.CARD || 0, upi: ps.UPI || 0 };
     let other = 0;
     Object.entries(ps).forEach(([k, v]) => {
-      if (!['CASH', 'CARD', 'UPI', 'WALLET'].includes(k) && typeof v === 'number') other += v;
+      if (!['CASH', 'CARD', 'UPI'].includes(k) && typeof v === 'number') other += v;
     });
     return { ...known, other };
   }, [salesData]);
 
-  const totalPayments = paymentSummary.cash + paymentSummary.card + paymentSummary.upi + paymentSummary.wallet + paymentSummary.other;
+  const totalPayments = paymentSummary.cash + paymentSummary.card + paymentSummary.upi + paymentSummary.other;
 
   // ── Payment Distribution Chart ──
   const paymentChartData = useMemo(() => ({
-    labels: ['Cash', 'Card', 'UPI', 'Wallet', 'Other'],
+    labels: ['Cash', 'Card', 'UPI', 'Other'],
     datasets: [{
-      data: [paymentSummary.cash, paymentSummary.card, paymentSummary.upi, paymentSummary.wallet, paymentSummary.other],
-      backgroundColor: ['rgba(22,163,74,0.85)', 'rgba(37,99,235,0.85)', 'rgba(124,58,237,0.85)', 'rgba(217,119,6,0.85)', 'rgba(100,116,139,0.85)'],
+      data: [paymentSummary.cash, paymentSummary.card, paymentSummary.upi, paymentSummary.other],
+      backgroundColor: ['rgba(22,163,74,0.85)', 'rgba(37,99,235,0.85)', 'rgba(124,58,237,0.85)', 'rgba(100,116,139,0.85)'],
       borderWidth: 0, cutout: '70%',
     }],
   }), [paymentSummary]);
@@ -271,13 +273,13 @@ export default function SalesReports({
                 </div>
                 <div className="space-y-2 text-[10px]">
                   {[{ l: 'Cash', v: paymentSummary.cash, c: '#16A34A' }, { l: 'Card', v: paymentSummary.card, c: '#2563EB' },
-                    { l: 'UPI', v: paymentSummary.upi, c: '#7C3AED' }, { l: 'Wallet', v: paymentSummary.wallet, c: '#D97706' },
+                    { l: 'UPI', v: paymentSummary.upi, c: '#7C3AED' },
                     ...(paymentSummary.other > 0 ? [{ l: 'Other', v: paymentSummary.other, c: '#64748B' }] : []),
                   ].map(p => (
                     <div key={p.l} className="flex items-center gap-2">
                       <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: p.c }} />
                       <span className="font-semibold text-slate-600 min-w-[32px]">{p.l}</span>
-                      <span className="font-mono font-bold text-slate-800">₹{Number(p.v || 0).toFixed(0)}</span>
+                      <span className="font-mono font-bold text-slate-800">{fc(Number(p.v || 0))}</span>
                       <span className="text-slate-400">({totalPayments > 0 ? Math.round((Number(p.v || 0) / totalPayments) * 100) : 0}%)</span>
                     </div>
                   ))}
@@ -571,67 +573,11 @@ export default function SalesReports({
             />
           </div>
           <div className="h-64">
-            <Bar data={hourlyData} options={{ ...chartDefaults, scales: { x: { grid: { display: false }, ticks: { font: { ...chartFont, size: 7 }, maxTicksLimit: 12 } }, y: { beginAtZero: true, ticks: { font: chartFont, callback: v => '₹' + v } } } }} />
+            <Bar data={hourlyData} options={{ ...chartDefaults, scales: { x: { grid: { display: false }, ticks: { font: { ...chartFont, size: 7 }, maxTicksLimit: 12 } }, y: { beginAtZero: true, ticks: { font: chartFont, callback: v => currencySymbol + v } } } }} />
           </div>
         </div>
       )}
 
-      {/* ═══ Sales Comparison ═══ */}
-      {subTab === 'comparison' && (
-        <div className="space-y-4">
-          <div className="flex justify-end">
-            <ReportExportBar
-              title="Sales Comparison"
-              columns={[{ key: 'metric', label: 'Metric' }, { key: 'current', label: 'Current Period' }]}
-              data={[
-                { metric: 'Total Sales', current: s.totalSales || 0 },
-                { metric: 'Total Orders', current: s.totalOrders || 0 },
-                { metric: 'Avg Order Value', current: s.averageOrderValue || 0 },
-                { metric: 'Items Sold', current: totalItemsSold },
-                { metric: 'Discounts', current: s.totalDiscount || 0 },
-                { metric: 'Net Revenue', current: s.netSales || 0 },
-              ]}
-              dateRange={dateRange}
-            />
-          </div>
-          <div className="bg-white rounded-[18px] border border-slate-200 p-4 shadow-xs">
-            <h4 className="text-[10px] font-extrabold text-slate-800 uppercase tracking-wider mb-3">Current Period Summary</h4>
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-              {[
-                { label: 'Total Sales', value: formatCurrencyVal(s.totalSales || 0) },
-                { label: 'Total Orders', value: s.totalOrders || 0 },
-                { label: 'Avg Order Value', value: formatCurrencyVal(s.averageOrderValue || 0) },
-                { label: 'Items Sold', value: totalItemsSold },
-                { label: 'Discounts', value: formatCurrencyVal(s.totalDiscount || 0) },
-                { label: 'Net Revenue', value: formatCurrencyVal(s.netSales || 0) },
-              ].map((k, i) => (
-                <div key={i} className="bg-slate-50 rounded-xl p-3 border border-slate-100">
-                  <p className="text-[9px] font-bold uppercase text-slate-400 tracking-wider">{k.label}</p>
-                  <p className="text-sm font-extrabold text-slate-800 mt-1">{k.value}</p>
-                </div>
-              ))}
-            </div>
-          </div>
-          <div className="bg-white rounded-[18px] border border-slate-200 p-4 shadow-xs">
-            <h4 className="text-[10px] font-extrabold text-slate-800 uppercase tracking-wider mb-3">Previous Period Summary</h4>
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-              {[
-                { label: 'Total Sales', value: formatCurrencyVal(0) },
-                { label: 'Total Orders', value: 0 },
-                { label: 'Avg Order Value', value: formatCurrencyVal(0) },
-                { label: 'Items Sold', value: 0 },
-                { label: 'Discounts', value: formatCurrencyVal(0) },
-                { label: 'Net Revenue', value: formatCurrencyVal(0) },
-              ].map((k, i) => (
-                <div key={i} className="bg-slate-50 rounded-xl p-3 border border-slate-100">
-                  <p className="text-[9px] font-bold uppercase text-slate-400 tracking-wider">{k.label}</p>
-                  <p className="text-sm font-extrabold text-slate-800 mt-1">{k.value}</p>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

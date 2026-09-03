@@ -71,6 +71,7 @@ if (!invalidationRegistered) {
 
 export default function MenuPage() {
   const { settings } = useSettingsStore();
+  const currency = settings?.currencySymbol || '₹';
   const { addToast } = useUiStore();
   
   // Menu items state
@@ -619,7 +620,7 @@ export default function MenuPage() {
                   }`}>
                     <span className={`w-2 h-2 rounded-full ${item.isVeg ? 'bg-emerald-600' : 'bg-red-600'}`} />
                   </span>
-                  <span className="absolute top-1.5 right-1.5 bg-slate-900/80 text-white font-mono text-[9px] font-bold px-1.5 py-0.5 rounded">₹{item.price}</span>
+                  <span className="absolute top-1.5 right-1.5 bg-slate-900/80 text-white font-mono text-[9px] font-bold px-1.5 py-0.5 rounded">{currency}{item.price}</span>
                   <span className={`absolute bottom-1.5 right-1.5 text-[8px] font-bold px-1.5 py-0.5 rounded shadow ${
                     item.stockStatus === 'Available' ? 'bg-emerald-500 text-white' :
                     item.stockStatus === 'Low Stock' ? 'bg-red-500 text-white animate-pulse' : 'bg-red-600 text-white'
@@ -899,7 +900,7 @@ export default function MenuPage() {
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1">
-                  <label className="text-[9px] font-bold uppercase text-slate-400">Price (₹) *</label>
+                  <label className="text-[9px] font-bold uppercase text-slate-400">Price ({currency}) *</label>
                   {/* no-spinner: direct numeric entry only — no increment/decrement arrows */}
                   <input type="number" step="0.01" inputMode="decimal" value={itemPrice} onChange={(e) => setItemPrice(sanitizeNumeric(e.target.value))}
                     className="no-spinner w-full h-8 px-2 bg-slate-50 border rounded-lg outline-none" required />

@@ -54,15 +54,12 @@ export async function connectSocket(token) {
       timeout: 5000,
     });
 
-    socket.on('connect', () => {
-      console.log('🔌 Socket connected:', socket.id);
-    });
+    // Production: no noisy success logs. Development diagnostics via getSocketStatus().
+    socket.on('connect', () => {});
+    socket.on('disconnect', () => {});
 
-    socket.on('disconnect', (reason) => {
-      console.log('🔌 Socket disconnected:', reason);
-    });
-
-    // Silently ignore connection errors — polling fallback handles data
+    // Connection errors are expected when backend is temporarily unavailable.
+    // Polling fallback handles data refresh. No console spam.
     socket.on('connect_error', () => {});
 
     connectPromise = null;

@@ -4,7 +4,7 @@ import {
   Clock, Users, Search, Ban, RefreshCw, Loader2, X, AlertTriangle, 
   Plus, Printer, CreditCard, ArrowRight, UtensilsCrossed, 
   Coffee, CheckCircle2, RotateCcw, DollarSign, Trash2, ChefHat,
-  Eye, Play
+  Eye, Play, SplitSquareVertical
 } from 'lucide-react';
 import orderApi from '../../../api/order.api';
 import { kotApi } from '../../../api/kot.api';
@@ -28,7 +28,10 @@ const CANCEL_REASONS = ['Customer Cancelled', 'Wrong Order', 'Duplicate Order', 
 
 // ── Helper: Calculate elapsed time ──
 const getElapsed = (createdAt) => {
-  const diffMins = Math.floor((Date.now() - new Date(createdAt).getTime()) / 60000);
+  if (!createdAt) return '0m';
+  const time = new Date(createdAt).getTime();
+  if (isNaN(time)) return '0m'; // missing/invalid timestamp must never render NaN
+  const diffMins = Math.floor((Date.now() - time) / 60000);
   if (diffMins < 0) return '0m';
   if (diffMins < 60) return `${diffMins}m`;
   return `${Math.floor(diffMins / 60)}h ${diffMins % 60}m`;
@@ -96,6 +99,7 @@ export default function ActiveOrdersPage() {
   const { setCheckoutOrderId, setActiveOrderTakingId, setShowTakeOrderWizard, addToast, ordersActiveTab, setOrdersActiveTab, refreshTrigger, incrementRefreshTrigger } = useUiStore();
   const { orders, setOrders } = useCartStore();
   const { settings } = useSettingsStore();
+  const currency = settings?.currencySymbol || '₹';
   const { user } = useAuthStore();
   const isServiceStaff = (user?.role || '').toUpperCase() === 'WAITER';
   const [searchQuery, setSearchQuery] = useState('');
@@ -123,6 +127,12 @@ export default function ActiveOrdersPage() {
 
   // Hold button loading per order
   const [holdLoading, setHoldLoading] = useState(null);
+
+  // KOT button loading per order (double-click protection)
+  const [kotLoading, setKotLoading] = useState(null);
+
+  // Split merged-order button loading per merge group
+  const [splitLoading, setSplitLoading] = useState(null);
 
   // Completed orders
   const [completedOrders, setCompletedOrders] = useState([]);
@@ -270,6 +280,7 @@ export default function ActiveOrdersPage() {
   };
 
   const handlePrintKOT = async (order) => {
+    if (kotLoading) return; // double-click protection
     if (isOrderCancelled(order)) {
       addToast('This order has been cancelled and cannot be printed.', 'error');
       return;
@@ -278,18 +289,25 @@ export default function ActiveOrdersPage() {
       addToast('Kitchen module is disabled in POS Settings', 'warning');
       return;
     }
+    setKotLoading(order.id);
     try {
-      // Try to get KOT data from backend
-      let kotNo = '';
-      try {
-        await kotApi.reprintByOrder(order.id);
-        if (order.kot?.[0]?.kotNo) {
-          kotNo = order.kot[0].kotNo;
-        }
-      } catch { /* non-critical */ }
-      
-      // Open KOT print preview with actual order data
-      const items = order.orderItems || [];
+      // Create a DELTA KOT — only items not yet sent to kitchen.
+      // The backend calculates quantity − sentQuantity and returns only the delta.
+      const kotResp = await kotApi.create({ orderId: order.id });
+      // Backend returns { success: true, data: { created, kot, kotItems, kotNo } }
+      const kotData = kotResp?.data || kotResp;
+
+      // If no new items, backend returns created=false — this is normal, not an error
+      if (kotData?.created === false || !kotData?.kotNo) {
+        addToast('No new items to send to kitchen.', 'info');
+        return;
+      }
+
+      const kotNo = kotData?.kotNo || '';
+      // KOTItems from the response contain ONLY the delta items for this KOT.
+      // Never fall back to order.orderItems — that would print all items, defeating incremental KOT.
+      const items = kotData?.kotItems || [];
+
       openKotPrintPreview({
         restaurantName: settings?.branding?.restaurantName || '',
         kotNo: kotNo,
@@ -305,11 +323,13 @@ export default function ActiveOrdersPage() {
         footer: settings?.receiptFooterMessage || 'Thank You!',
         date: new Date()
       });
-      addToast(`KOT printed for Order ${order.orderNo || order.id}`, 'success');
+      addToast(`KOT ${kotNo} created for Order ${order.orderNo || order.id}`, 'success');
       incrementRefreshTrigger();
     } catch (e) {
-      const msg = e?.response?.data?.message || 'Unable to connect to the printer. Please check your printer settings and try again.';
+      const msg = e?.message || 'Unable to connect to the printer. Please check your printer settings and try again.';
       addToast(msg, 'error');
+    } finally {
+      setKotLoading(null);
     }
   };
 
@@ -423,6 +443,25 @@ export default function ActiveOrdersPage() {
     setCancelSubmitting(false);
   };
 
+  // ── Split handler ──
+  // Splits an ACTIVE merged-table group back into separate tables/orders.
+  // splitLoading state lives at component level so the card buttons that
+  // reference it (below) can disable while the split request is in flight.
+  const handleSplit = async (mergeGroupId) => {
+    if (!mergeGroupId || splitLoading) return;
+    setSplitLoading(mergeGroupId);
+    try {
+      await orderApi.splitOrders(mergeGroupId);
+      addToast("Tables split successfully", "success");
+      fetchActiveOrders();
+      fetchHeldAndCompleted();
+    } catch (err) {
+      addToast(err?.response?.data?.message || "Failed to split", "error");
+    } finally {
+      setSplitLoading(null);
+    }
+  };
+
   const handleCancelBack = () => {
     setShowCancelReason(false);
     setShowCancelConfirm(true);
@@ -524,6 +563,7 @@ export default function ActiveOrdersPage() {
   };
 
   const handlePrintKotHeld = async (orderId) => {
+    if (kotLoading) return; // double-click protection
     const heldOrder = heldOrders.find(o => o.id === parseInt(orderId.toString()));
     if (heldOrder && isOrderCancelled(heldOrder)) {
       addToast('This order has been cancelled and cannot be printed.', 'error');
@@ -533,20 +573,25 @@ export default function ActiveOrdersPage() {
       addToast('Kitchen module is disabled in POS Settings', 'warning');
       return;
     }
-    setActionLoading(orderId);
+    setKotLoading(orderId);
     const backendId = parseInt(orderId.toString());
     try {
-      // Try backend reprint to mark in system
-      let kotNo = '';
-      try {
-        await kotApi.reprintByOrder(backendId);
-        if (heldOrder?.kot?.[0]?.kotNo) {
-          kotNo = heldOrder.kot[0].kotNo;
-        }
-      } catch { /* non-critical */ }
-      
-      // Open KOT print preview with actual order data
-      const items = heldOrder?.orderItems || [];
+      // Create a DELTA KOT for held orders too
+      const kotResp = await kotApi.create({ orderId: backendId });
+      // Backend returns { success: true, data: { created, kot, kotItems, kotNo } }
+      const kotData = kotResp?.data || kotResp;
+
+      // If no new items, backend returns created=false — this is normal, not an error
+      if (kotData?.created === false || !kotData?.kotNo) {
+        addToast('No new items to send to kitchen.', 'info');
+        return;
+      }
+
+      const kotNo = kotData?.kotNo || '';
+      // KOTItems from the response contain ONLY the delta items for this KOT.
+      // Never fall back to order.orderItems — that would print all items.
+      const items = kotData?.kotItems || [];
+
       openKotPrintPreview({
         restaurantName: settings?.branding?.restaurantName || '',
         kotNo: kotNo,
@@ -562,13 +607,13 @@ export default function ActiveOrdersPage() {
         footer: settings?.receiptFooterMessage || 'Thank You!',
         date: new Date()
       });
-      addToast('KOT printed successfully!', 'success');
+      addToast(`KOT ${kotNo} created successfully!`, 'success');
       incrementRefreshTrigger();
     } catch (e) {
-      const msg = e?.response?.data?.message || 'Unable to connect to the printer. Please check your printer settings and try again.';
+      const msg = e?.message || 'Unable to connect to the printer. Please check your printer settings and try again.';
       addToast(msg, 'error');
     } finally {
-      setActionLoading(null);
+      setKotLoading(null);
     }
   };
 
@@ -669,6 +714,9 @@ export default function ActiveOrdersPage() {
           <div className="flex items-center gap-1 text-slate-500">
             <UtensilsCrossed className="w-3 h-3 text-slate-400" />
             <span className="font-semibold truncate">{tableName}</span>
+            {order.isMerged && order.mergedTables && order.mergedTables.length > 1 && (
+              <span className="text-[8px] text-amber-600 font-bold ml-1">(Merged: {order.mergedTables.map(t => t.tableNo).join(" + ")})</span>
+            )}
           </div>
           <div className="flex items-center gap-1 text-slate-500">
             <span className="font-semibold">👤</span>
@@ -687,7 +735,7 @@ export default function ActiveOrdersPage() {
         {/* Total */}
         <div className="flex justify-between items-center border-t border-dashed border-slate-200 pt-2 mt-0.5 mb-2">
           <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Total</span>
-          <span className="font-mono text-sm font-black text-[#16A34A]">₹{Number(total).toLocaleString('en-IN')}</span>
+          <span className="font-mono text-sm font-black text-[#16A34A]">{currency}{Number(total).toLocaleString('en-IN')}</span>
         </div>
 
         {/* Simplified Action Buttons: Add Item, Print KOT (if enabled), Bill (if enabled), Transfer (if enabled), Cancel */}
@@ -698,9 +746,9 @@ export default function ActiveOrdersPage() {
             <Plus className="w-3 h-3" /> Add Item
           </button>
           {settings.enableKitchen !== false && (
-            <button onClick={() => handlePrintKOT(order)}
-              className="h-10 bg-white border border-slate-200 hover:bg-slate-50 text-[#111827] font-bold rounded-lg text-[9px] uppercase tracking-wider flex items-center justify-center gap-1 transition-colors cursor-pointer">
-              <Printer className="w-3 h-3" /> KOT
+            <button onClick={() => handlePrintKOT(order)} disabled={kotLoading === order.id}
+              className="h-10 bg-white border border-slate-200 hover:bg-slate-50 text-[#111827] font-bold rounded-lg text-[9px] uppercase tracking-wider flex items-center justify-center gap-1 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed">
+              {kotLoading === order.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Printer className="w-3 h-3" />} KOT
             </button>
           )}
           {settings.enableBilling !== false && !isServiceStaff && (
@@ -722,6 +770,13 @@ export default function ActiveOrdersPage() {
               className={`h-10 bg-white border border-amber-200 hover:bg-amber-50 text-amber-700 font-bold rounded-lg text-[9px] uppercase tracking-wider flex items-center justify-center gap-1 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed`}>
               {holdLoading === order.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Coffee className="w-3 h-3" />}
               Hold
+            </button>
+          )}
+          {order.isMerged && order.mergeGroupId && (
+            <button onClick={() => handleSplit(order.mergeGroupId)} disabled={splitLoading === order.mergeGroupId}
+              className="h-10 bg-white border border-amber-200 hover:bg-amber-50 text-amber-700 font-bold rounded-lg text-[9px] uppercase tracking-wider flex items-center justify-center gap-1 transition-colors cursor-pointer disabled:opacity-50">
+              {splitLoading === order.mergeGroupId ? <Loader2 className="w-3 h-3 animate-spin" /> : <SplitSquareVertical className="w-3 h-3" />}
+              Split
             </button>
           )}
           <button onClick={() => handleCancelClick(order)}
@@ -767,8 +822,7 @@ export default function ActiveOrdersPage() {
         {/* Info Bar */}
         <div className="flex items-center gap-3 text-[10px] text-slate-500 font-semibold border-t border-slate-100 pt-2">
           <span className="flex items-center gap-0.5"><ChefHat className="w-3 h-3" /> {waiterName}</span>
-          <span>{itemCount} item{itemCount !== 1 ? 's' : ''}</span>
-          <span className="ml-auto font-mono font-bold text-slate-800">₹{Number(total).toFixed(0)}</span>
+          <span>{itemCount} item{itemCount !== 1 ? 's' : ''}</span>              <span className="ml-auto font-mono font-bold text-slate-800">{currency}{Number(total).toFixed(0)}</span>
         </div>
 
         {/* Actions */}
@@ -781,9 +835,9 @@ export default function ActiveOrdersPage() {
               <RotateCcw className="w-3 h-3" /> Resume
             </button>
             {settings.enableKitchen !== false && (
-              <button onClick={() => handlePrintKotHeld(order.id)}
-                className="h-10 text-[9px] font-bold bg-orange-100 hover:bg-orange-200 text-orange-800 rounded-lg flex items-center justify-center gap-1 transition-all cursor-pointer">
-                <Printer className="w-3 h-3" /> KOT
+              <button onClick={() => handlePrintKotHeld(order.id)} disabled={kotLoading === order.id}
+                className="h-10 text-[9px] font-bold bg-orange-100 hover:bg-orange-200 text-orange-800 rounded-lg flex items-center justify-center gap-1 transition-all cursor-pointer disabled:opacity-50">
+                {kotLoading === order.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Printer className="w-3 h-3" />} KOT
               </button>
             )}
             {settings.enableBilling !== false && !isServiceStaff && (
@@ -823,8 +877,7 @@ export default function ActiveOrdersPage() {
           <span className="font-semibold text-right">{customerName}</span>
         </div>
         <div className="flex justify-between items-center border-t border-dashed border-slate-200 pt-2">
-          <span className="text-[9px] font-bold text-slate-400">{itemsCount} items</span>
-          <span className="font-mono font-black text-slate-700">₹{Number(total).toLocaleString('en-IN')}</span>
+          <span className="text-[9px] font-bold text-slate-400">{itemsCount} items</span>              <span className="font-mono font-black text-slate-700">{currency}{Number(total).toLocaleString('en-IN')}</span>
         </div>
         {settings.enableBilling !== false && !isServiceStaff && (
           <button onClick={() => handleReprintBill(order)}
@@ -880,8 +933,7 @@ export default function ActiveOrdersPage() {
             <span className="font-bold text-red-600 text-right max-w-[60%] truncate">{cancelReason}</span>
           </div>
           <div className="flex justify-between text-[10px]">
-            <span className="font-semibold text-slate-500">Total:</span>
-            <span className="font-mono font-black text-slate-500 line-through">₹{Number(total).toLocaleString('en-IN')}</span>
+            <span className="font-semibold text-slate-500">Total:</span>              <span className="font-mono font-black text-slate-500 line-through">{currency}{Number(total).toLocaleString('en-IN')}</span>
           </div>
         </div>
 
@@ -893,8 +945,7 @@ Table: ${order.table?.tableNo || 'Takeaway'}
 Customer: ${customerName}
 Cancelled: ${cancelledTime}
 By: ${cancelledBy}
-Reason: ${cancelReason}
-Total: ₹${Number(total).toLocaleString('en-IN')}
+Reason: ${cancelReason}             Total: ₹${Number(total).toLocaleString('en-IN')}
 Items: ${itemsCount}`, 'info');
           }}
             className="w-full h-10 bg-white border border-slate-200 hover:bg-red-50 text-slate-500 font-bold rounded-lg text-[9px] uppercase tracking-wider flex items-center justify-center gap-1 transition-colors cursor-pointer">
@@ -905,7 +956,10 @@ Items: ${itemsCount}`, 'info');
     );
   };
 
-  if (loading && ordersActiveTab === 'Active') {
+  // Show the spinner only when there is nothing cached to render yet.
+  // If orders already exist in the store (previous visit / realtime update),
+  // show them immediately and refresh in the background — never blank the page.
+  if (loading && ordersActiveTab === 'Active' && (orders || []).length === 0) {
     return (
       <div className="flex items-center justify-center h-64 text-slate-400">
         <Loader2 className="w-5 h-5 animate-spin mr-2" />

@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { Doughnut } from 'react-chartjs-2';
-import { CreditCard, Wallet, Smartphone, PieChart } from 'lucide-react';
+import { CreditCard, Smartphone, PieChart } from 'lucide-react';
 import { formatCurrency, formatDate, formatTime } from '../../../lib/utils';
 import ReportExportBar from '../../../components/common/ReportExportBar';
 
@@ -39,10 +39,9 @@ export default function PaymentReports({ paymentData, loading, formatCurrency: f
   }), [methodBreakdown]);
 
   const knownMethods = [
-    { key: 'CASH', label: 'Cash', color: 'emerald', icon: Wallet },
+    { key: 'CASH', label: 'Cash', color: 'emerald', icon: CreditCard },
     { key: 'CARD', label: 'Card', color: 'blue', icon: CreditCard },
     { key: 'UPI', label: 'UPI', color: 'purple', icon: Smartphone },
-    { key: 'WALLET', label: 'Wallet', color: 'amber', icon: Wallet },
   ];
 
   if (loading) return null;
@@ -77,10 +76,10 @@ export default function PaymentReports({ paymentData, loading, formatCurrency: f
               </div>
             );
           })}
-          {methodBreakdown.filter(m => !['CASH', 'CARD', 'UPI', 'WALLET'].includes(m.method)).map(m => (
+          {methodBreakdown.filter(m => !['CASH', 'CARD', 'UPI'].includes(m.method)).map(m => (
             <div key={m.method} className="bg-slate-50 rounded-xl p-3 border border-slate-100">
               <div className="flex items-center gap-2 mb-2">
-                <Wallet className="w-4 h-4 text-slate-600" />
+                <CreditCard className="w-4 h-4 text-slate-600" />
                 <p className="text-[9px] font-bold uppercase text-slate-500">{m.method}</p>
               </div>
               <p className="text-lg font-extrabold text-slate-600">{fcVal(m.amount)}</p>

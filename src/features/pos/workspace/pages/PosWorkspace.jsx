@@ -19,6 +19,7 @@ const ICON_MAP = {
 
 export default function PosWorkspace() {
   const { settings } = useSettingsStore();
+  const currency = settings?.currencySymbol || '₹';
   const { activeOrderTakingId, setScreen, setCheckoutOrderId, addToast, goBack, refreshTrigger } = useUiStore();
 
   // ── Data state ──
@@ -226,7 +227,12 @@ export default function PosWorkspace() {
       }
     } else if (activeOrderTakingId && !counterSaleMode) {
       const backendId = parseInt(activeOrderTakingId.replace('ord-', ''), 10);
-      setCheckoutOrderId(isNaN(backendId) ? activeOrderTakingId : backendId);
+      if (Number.isSafeInteger(backendId) && backendId > 0) {
+        setCheckoutOrderId(backendId);
+      } else {
+        addToast('Invalid order ID.', 'error');
+        setCheckoutOrderId(null);
+      }
       setSubmitting(null);
     }
   };
@@ -305,7 +311,7 @@ export default function PosWorkspace() {
                 }">
                   <span className={`w-2 h-2 rounded-full ${item.isVeg ? 'bg-emerald-600' : 'bg-red-600'}`} />
                 </span>
-                <span className="absolute bottom-1.5 right-1.5 bg-slate-900/80 text-white font-mono text-[10px] font-bold px-1.5 py-0.5 rounded">₹{item.price}</span>
+                <span className="absolute bottom-1.5 right-1.5 bg-slate-900/80 text-white font-mono text-[10px] font-bold px-1.5 py-0.5 rounded">{currency}{item.price}</span>
                 {lowStock && (
                   <span className="absolute bottom-1.5 left-1.5 bg-red-500 text-white text-[8px] font-bold px-1.5 py-0.5 rounded">Low Stock</span>
                 )}
@@ -313,7 +319,7 @@ export default function PosWorkspace() {
               <div className="p-2.5">
                 <p className="text-[13px] font-extrabold text-slate-800 truncate">{item.name}</p>
                 <div className="flex items-center justify-between mt-1">
-                  <p className="text-[13px] font-bold text-[#16A34A] font-mono">₹{item.price}</p>
+                  <p className="text-[13px] font-bold text-[#16A34A] font-mono">{currency}{item.price}</p>
                   {outOfStock ? (
                     <span className="text-[9px] font-bold text-slate-400">Out of stock</span>
                   ) : (
@@ -434,7 +440,7 @@ export default function PosWorkspace() {
               <div className="flex justify-between items-start">
                 <div className="min-w-0 flex-1">
                   <p className="text-[11px] font-extrabold text-slate-800 truncate">{item.name}</p>
-                  <p className="text-[10px] font-bold text-slate-500 font-mono">₹{item.price} each</p>
+                  <p className="text-[10px] font-bold text-slate-500 font-mono">{currency}{item.price} each</p>
                 </div>
                 <button onClick={() => removeFromCart(item.itemId)} aria-label={`Remove ${item.name} from cart`} className="p-1.5 text-slate-300 hover:text-red-500 cursor-pointer">
                   <Trash className="w-3.5 h-3.5" />
@@ -449,7 +455,7 @@ export default function PosWorkspace() {
                 </div>
                 <div className="flex items-center gap-1">
                   <button onClick={() => { setNoteForItem(item.itemId); setItemNotes(item.notes || ''); }} aria-label={`Add note to ${item.name}`} className="p-1.5 text-slate-400 hover:text-[#C85A32] cursor-pointer"><span className="text-[10px]">📝</span></button>
-                  <span className="font-mono font-bold text-xs text-slate-800">₹{(item.price * item.quantity).toFixed(0)}</span>
+                  <span className="font-mono font-bold text-xs text-slate-800">{currency}{(item.price * item.quantity).toFixed(0)}</span>
                 </div>
               </div>
             </div>
@@ -465,10 +471,10 @@ export default function PosWorkspace() {
         {/* Order Summary & Actions */}
         <div className="border-t border-slate-200 p-3.5 bg-slate-50/50 space-y-2">
           <div className="space-y-1 text-[11px]">
-            <div className="flex justify-between font-semibold text-slate-600"><span>Subtotal</span><span className="font-mono">₹{subtotal.toFixed(0)}</span></div>
-            {discount > 0 && <div className="flex justify-between font-semibold text-green-600"><span>Discount</span><span className="font-mono">-₹{discount.toFixed(0)}</span></div>}
+            <div className="flex justify-between font-semibold text-slate-600"><span>Subtotal</span><span className="font-mono">{currency}{subtotal.toFixed(0)}</span></div>
+            {discount > 0 && <div className="flex justify-between font-semibold text-green-600"><span>Discount</span><span className="font-mono">-{currency}{discount.toFixed(0)}</span></div>}
             <div className="flex justify-between font-bold text-slate-800 text-sm border-t border-slate-200 pt-1.5">
-              <span>Total</span><span className="font-mono text-[#16A34A]">₹{total.toFixed(0)}</span>
+              <span>Total</span><span className="font-mono text-[#16A34A]">{currency}{total.toFixed(0)}</span>
             </div>
           </div>
           <div className="flex gap-1.5">

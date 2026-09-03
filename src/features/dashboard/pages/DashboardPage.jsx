@@ -117,6 +117,7 @@ export default function DashboardPage() {
         const todaySalesValue = Number(sales.totalSales ?? summary.todayRevenue ?? 0);
         const monthlySalesValue = Number(sales.monthlySales ?? 0);
         const todayOrdersCount = Number(summary.todayOrders ?? 0);
+        const todayBillsCount = Number(summary.todayBills ?? 0);
         const liveOrdersList = d.liveOrders || [];
 
         // Map backend structure to frontend expected format
@@ -130,8 +131,8 @@ export default function DashboardPage() {
           totalTables: totalTablesCount || Number(summary.availableTables || 0) + Number(summary.occupiedTables || 0),
           staffOnShift: Number(staff.total || 0),
           totalStaff: Number(staff.total || 0),
-          averageOrderValue: todayOrdersCount > 0
-            ? Math.round((todaySalesValue / todayOrdersCount) * 100) / 100
+          averageOrderValue: todayBillsCount > 0
+            ? Math.round((todaySalesValue / todayBillsCount) * 100) / 100
             : 0,
           salesByHour: Array.isArray(d.hourlySales) ? d.hourlySales : [],
           monthlySales: monthlySalesValue,
@@ -480,10 +481,6 @@ export default function DashboardPage() {
               <div className="flex justify-between items-center p-2.5 bg-blue-50 rounded-xl border border-blue-100">
                 <span className="text-xs font-bold text-blue-800">Avg Order Value</span>
                 <span className="text-sm font-extrabold text-blue-700">{formatCurrency(Number(data?.averageOrderValue ?? 0))}</span>
-              </div>
-              <div className="flex justify-between items-center p-2.5 bg-purple-50 rounded-xl border border-purple-100">
-                <span className="text-xs font-bold text-purple-800">Monthly Sales</span>
-                <span className="text-sm font-extrabold text-purple-700">{formatCurrency(Number(data?.monthlySales ?? 0))}</span>
               </div>
             </div>
           </div>

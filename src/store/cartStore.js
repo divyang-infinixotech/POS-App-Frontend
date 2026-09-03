@@ -86,6 +86,7 @@ const useCartStore = create((set, get) => ({
         set((state) => ({
           orders: state.orders.filter((o) => o.id !== orderId),
         }));
+        // Return the full response data — includes { bill, payments, alreadyPaid }
         return resp.data;
       }
       throw new Error(resp.message || 'Payment failed');

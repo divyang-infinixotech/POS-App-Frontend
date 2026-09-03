@@ -73,7 +73,7 @@ export default function UserManagement() {
     <div className="space-y-4 animate-fade-in">
       <div>
         <h1 className="text-xl font-extrabold text-slate-800">User Management</h1>
-        <p className="text-xs text-slate-500 mt-1">Manage users across all restaurants</p>
+        <p className="text-xs text-slate-500 mt-1">Platform users (restaurant ADMINs). Restaurant staff are managed in each restaurant's Staff Roster.</p>
       </div>
 
       <div className="flex flex-wrap gap-2">
@@ -84,10 +84,6 @@ export default function UserManagement() {
         <select value={roleFilter} onChange={e => { setRoleFilter(e.target.value); setPage(1); }} className="h-9 px-3 bg-white border border-slate-200 rounded-xl text-xs font-semibold outline-none">
           <option value="">All Roles</option>
           <option value="ADMIN">Admin</option>
-          <option value="MANAGER">Manager</option>
-          <option value="CASHIER">Cashier</option>
-          <option value="WAITER">Service Staff</option>
-          <option value="KITCHEN">Kitchen</option>
         </select>
         <select value={statusFilter} onChange={e => { setStatusFilter(e.target.value); setPage(1); }} className="h-9 px-3 bg-white border border-slate-200 rounded-xl text-xs font-semibold outline-none">
           <option value="">All Status</option>

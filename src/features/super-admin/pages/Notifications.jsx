@@ -36,7 +36,7 @@ export default function Notifications() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-extrabold text-slate-800">Notifications</h1>
-          <p className="text-xs text-slate-500 mt-1">All platform notifications</p>
+          <p className="text-xs text-slate-500 mt-1">Platform notifications only — restaurant operational events stay inside each restaurant</p>
         </div>
         <button onClick={load} className="h-9 w-9 flex items-center justify-center bg-white border border-slate-200 rounded-xl hover:bg-slate-50"><RefreshCw className="w-3.5 h-3.5 text-slate-500" /></button>
       </div>

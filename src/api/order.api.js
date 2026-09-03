@@ -25,6 +25,8 @@ export const orderApi = {
     apiClient.patch(`/orders/${id}/change-table`, { tableId }),
   mergeOrders: (sourceOrderId, targetOrderId) =>
     apiClient.post(`/orders/${sourceOrderId}/merge`, { targetOrderId }),
+  splitOrders: (mergeGroupId) =>
+    apiClient.post('/orders/split', { mergeGroupId }),
   addNotes: (id, data) =>
     apiClient.patch(`/orders/${id}/notes`, data),
 };

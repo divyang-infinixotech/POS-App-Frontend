@@ -3,6 +3,7 @@ import { Bar } from 'react-chartjs-2';
 import { Users, Activity, Tag } from 'lucide-react';
 import { formatCurrency } from '../../../lib/utils';
 import ReportExportBar from '../../../components/common/ReportExportBar';
+import { useSettingsStore } from '../../../store';
 
 const chartFont = { family: "'Inter', 'Segoe UI', sans-serif", size: 9 };
 const chartDefaults = { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } };
@@ -10,6 +11,8 @@ const chartDefaults = { responsive: true, maintainAspectRatio: false, plugins: {
 export default function StaffReports({ staffSales, staffActivity, staffDiscountCancellation, loading, formatCurrency: fc }) {
   const [subTab, setSubTab] = useState('sales');
   const fcVal = fc || formatCurrency;
+  const { settings } = useSettingsStore();
+  const currencySymbol = settings?.currencySymbol || '₹';
 
   if (loading) return null;
 
@@ -42,12 +45,12 @@ export default function StaffReports({ staffSales, staffActivity, staffDiscountC
               <h4 className="text-[10px] font-extrabold text-slate-800 uppercase tracking-wider mb-3 flex items-center gap-1.5">
                 <Users className="w-3.5 h-3.5 text-[#16A34A]" /> Staff Sales Performance
               </h4>
-              <div className="h-48"><Bar data={staffChartData} options={{ ...chartDefaults, scales: { x: { grid: { display: false }, ticks: { font: chartFont } }, y: { beginAtZero: true, ticks: { font: chartFont, callback: v => '₹' + v } } } }} /></div>
+              <div className="h-48"><Bar data={staffChartData} options={{ ...chartDefaults, scales: { x: { grid: { display: false }, ticks: { font: chartFont } }, y: { beginAtZero: true, ticks: { font: chartFont, callback: v => currencySymbol + v } } } }} /></div>
             </div>
           )}
           <div className="bg-white rounded-[18px] border border-slate-200 shadow-xs overflow-hidden">
             <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between"><p className="text-xs font-extrabold text-slate-800">Staff Sales ({sales.length})</p>
-              <ReportExportBar title="Staff Sales" columns={[{ key: 'name', label: 'Staff' }, { key: 'role', label: 'Role' }, { key: 'orderCount', label: 'Orders', format: 'number' }, { key: 'totalSales', label: 'Total Sales', format: 'currency' }, { key: 'averageOrderValue', label: 'Avg Order', format: 'currency' }]} data={sales} />
+              <ReportExportBar title="Staff Sales" columns={[{ key: 'name', label: 'Staff' }, { key: 'role', label: 'Role' }, { key: 'orderCount', label: 'Orders', format: 'number' }, { key: 'totalSales', label: 'Total Sales', format: 'currency' }, { key: 'averageOrder', label: 'Avg Order', format: 'currency' }]} data={sales} />
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-[10px]">

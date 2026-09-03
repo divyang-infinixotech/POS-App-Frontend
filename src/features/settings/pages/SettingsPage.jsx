@@ -145,7 +145,7 @@ const MODULE_TOGGLES = [
     key: 'enablePosOrdering',
     label: 'Enable POS Ordering Screen',
     description: "If ON: All orders start from POS Ordering (New Ticket button is hidden). If OFF: Hide 'POS Ordering' from the sidebar and show the New Ticket button instead.",
-    modes: ['hybrid'],
+    modes: ['restaurant', 'counter', 'hybrid'],
   },
   {
     key: 'enableCounterSale',

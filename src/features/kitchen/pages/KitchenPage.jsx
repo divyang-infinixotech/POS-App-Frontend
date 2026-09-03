@@ -243,7 +243,7 @@ export default function KitchenPage() {
                   </span>
                 </div>
                 <div className="flex justify-between items-center text-[10px] text-slate-400 border-t border-dashed border-slate-100 pt-1.5">
-                  <span className="font-semibold">{itemCount} item{itemCount !== 1 ? 's' : ''}</span>
+                  <span className="font-semibold">{(kot.kotItems?.length || 0)} item{(kot.kotItems?.length || 0) !== 1 ? 's' : ''}</span>
                   <span className="font-semibold">{kot.order?.orderType?.replace('_', ' ')}</span>
                 </div>
               </div>
@@ -294,8 +294,27 @@ export default function KitchenPage() {
               <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">
                 Items to prepare
               </p>
-              {selectedKot.order?.orderItems?.map((item, idx) => (
-                <div key={idx} className="p-2.5 border border-slate-200 rounded-xl hover:bg-slate-50 transition-all flex items-center justify-between gap-3">
+              {/* KOTItems are the authoritative source for what this KOT contains. */}
+              {(() => {
+                const kotItems = selectedKot.kotItems || [];
+                if (kotItems.length === 0) {
+                  // No KOTItems — this is a legacy KOT or a failed creation.
+                  // Show a warning instead of silently falling back to all order items.
+                  return (
+                    <div className="text-center py-6">
+                      <p className="text-[10px] text-amber-600 font-bold bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                        ⚠️ No KOTItems recorded for this KOT.
+                        {selectedKot.order?.orderItems?.length > 0 && (
+                          <span className="block mt-1 text-slate-500">
+                            Order has {selectedKot.order.orderItems.length} item(s) but none were tracked in this KOT.
+                          </span>
+                        )}
+                      </p>
+                    </div>
+                  );
+                }
+                return kotItems.map((item, idx) => (
+                <div key={item.orderItemId || item.id || idx} className="p-2.5 border border-slate-200 rounded-xl hover:bg-slate-50 transition-all flex items-center justify-between gap-3">
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
                       <span className="font-bold text-xs text-[#16A34A] font-mono shrink-0">{item.quantity}x</span>
@@ -308,7 +327,8 @@ export default function KitchenPage() {
                     )}
                   </div>
                 </div>
-              ))}
+              ));
+              })()}
             </div>
 
             {/* Actions — fixed bottom bar, never scrolls */}

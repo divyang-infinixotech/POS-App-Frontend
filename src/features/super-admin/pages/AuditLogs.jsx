@@ -43,11 +43,9 @@ export default function AuditLogs() {
           <option value="">All Modules</option>
           <option value="AUTH">Auth</option>
           <option value="USER">User</option>
-          <option value="ORDER">Order</option>
-          <option value="PAYMENT">Payment</option>
           <option value="SUBSCRIPTION">Subscription</option>
+          <option value="PAYMENT">Payment</option>
           <option value="SETTINGS">Settings</option>
-          <option value="MENU">Menu</option>
         </select>
       </div>
 

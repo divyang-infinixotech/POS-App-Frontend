@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { Layers, Plus, Edit, Trash, Users, X, ArrowRight, Check, Move, Merge, GripVertical, Split, Loader2 } from 'lucide-react';
-import { useAuthStore, useCartStore, useUiStore } from '../../../../store';
+import { useAuthStore, useCartStore, useUiStore, useSettingsStore } from '../../../../store';
 import ConfirmationDialog from '../../../../components/ConfirmationDialog';
 import { tableApi } from '../../../../api/table.api';
 import { floorApi } from '../../../../api/floor.api';
+import orderApi from '../../../../api/order.api';
 import { useSocketEvent } from '../../../../hooks/useSocket';
+import TableMergeModal from '../components/TableMergeModal';
 
 // Module-level cache to prevent refetch on remount
 let cachedTables = null;
@@ -16,6 +18,8 @@ export default function TablesPage() {
   const isAdmin = ['SUPER_ADMIN', 'ADMIN', 'MANAGER'].includes(user?.role?.toUpperCase());
   const isServiceStaff = (user?.role || '').toUpperCase() === 'WAITER';
   const { setScreen, setActiveOrderTakingId, setCheckoutOrderId, setShowTakeOrderWizard, addToast, refreshTrigger, incrementRefreshTrigger } = useUiStore();
+  const { settings } = useSettingsStore();
+  const currency = settings?.currencySymbol || '₹';
 
   const [tables, setTables] = useState(cachedTables || []);
   const [floors, setFloors] = useState([]);
@@ -23,6 +27,11 @@ export default function TablesPage() {
   const [loading, setLoading] = useState(!cachedTables);
   const [showDesigner, setShowDesigner] = useState(false);
   const [designerMode, setDesignerMode] = useState('tables');
+
+  // Merge Tables / Split Tables modal (DB-persisted MergeGroup)
+  const [mergeModalMode, setMergeModalMode] = useState(null); // null | 'merge' | 'split'
+  const [splitConfirm, setSplitConfirm] = useState(null); // { mergeGroupId, label } awaiting explicit confirmation
+  const [splitLoading, setSplitLoading] = useState(false);
 
   // Modals
   const [showOpenTableModal, setShowOpenTableModal] = useState(false);
@@ -56,9 +65,10 @@ export default function TablesPage() {
   const [deletingTable, setDeletingTable] = useState(false);
   const [deletingFloor, setDeletingFloor] = useState(false);
 
-  // Merge/Split
-  const [selectedForMerge, setSelectedForMerge] = useState([]);
-  const [mergeMode, setMergeMode] = useState(false);
+  // Merge info comes from the backend (DB MergeGroup). No client-only merge
+  // state is stored — mergeGroupId/isMerged/... are copied straight from the
+  // API response and never reset to defaults, so a persisted merge always
+  // survives refresh, navigation, logout/login and backend restarts.
 
   useEffect(() => {
     loadFloors();
@@ -103,6 +113,18 @@ export default function TablesPage() {
           floorId: t.floorId != null ? t.floorId : '',
           status: t.status === 'OCCUPIED' ? 'Occupied' : t.status === 'AVAILABLE' ? 'Available' : t.status || 'Available',
           currentOrderId: null,
+          // ── Persisted merge info (DB MergeGroup + MergeGroupTable) ──
+          // Carried through verbatim from GET /api/tables. NEVER reset to
+          // merged=false here — the DB is the source of truth and a merge must
+          // survive refresh, navigation, logout/login and backend restart.
+          tableNo: t.tableNo != null ? String(t.tableNo) : '',
+          mergeGroupId: t.mergeGroupId ?? null,
+          isMerged: !!(t.isMerged || t.mergeGroupId || (Array.isArray(t.mergedTableIds) && t.mergedTableIds.length > 0)),
+          isPrimaryTable: !!t.isPrimaryTable,
+          primaryTableId: t.primaryTableId ?? null,
+          primaryTableNo: t.primaryTableNo ?? null,
+          mergedTableIds: Array.isArray(t.mergedTableIds) ? t.mergedTableIds : [],
+          mergedTableNos: Array.isArray(t.mergedTableNos) ? t.mergedTableNos : [],
         }));
         setTables(mapped);
         cachedTables = mapped;
@@ -152,6 +174,9 @@ export default function TablesPage() {
   useSocketEvent({ event: 'order:updated', handler: invalidateAndReload });
   useSocketEvent({ event: 'order:cancelled', handler: invalidateAndReload });
   useSocketEvent({ event: 'order:deleted', handler: invalidateAndReload });
+  // Merge/split events → refetch from the DB (never derive merge from socket state alone)
+  useSocketEvent({ event: 'order:merged', handler: invalidateAndReload });
+  useSocketEvent({ event: 'order:split', handler: invalidateAndReload });
   // ── Periodic polling fallback (every 30s) — covers socket-disconnected edge cases ──
   React.useEffect(() => {
     const interval = setInterval(() => {
@@ -163,16 +188,6 @@ export default function TablesPage() {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleTableClick = (table) => {
-    if (mergeMode) {
-      setSelectedForMerge(prev => {
-        if (prev.find(s => s.id === table.id)) {
-          return prev.filter(s => s.id !== table.id);
-        }
-        return [...prev, table];
-      });
-      return;
-    }
-
     if (table.status === 'Occupied') {
       setSelectedOccupiedTable(table);
       setShowOccupiedModal(true);
@@ -188,14 +203,18 @@ export default function TablesPage() {
   const handleOpenTable = (e) => {
     e.preventDefault();
     if (activeTableNumber === null) return;
-    const orderId = `ord-${Date.now()}`;
+    // Mark the table as Occupied locally for visual feedback.
+    // Do NOT set a fake 'ord-{timestamp}' as activeOrderTakingId —
+    // the TakeOrderWizard will create a NEW order (no activeOrderTakingId)
+    // and the backend will assign the real database Order.id.
     setTables(prev => prev.map(t => t.number === activeTableNumber
-      ? { ...t, status: 'Occupied', currentOrderId: orderId, guestsCount: guestCount, billAmount: 0 }
+      ? { ...t, status: 'Occupied', currentOrderId: null, guestsCount: guestCount, billAmount: 0 }
       : t
     ));
     setShowOpenTableModal(false);
     setShowTakeOrderWizard(true);
-    setActiveOrderTakingId(orderId);
+    // Do NOT call setActiveOrderTakingId — leave it null so the wizard
+    // operates in "new order" mode and never attempts GET /api/orders/{fakeId}
   };
 
   const handleChangeStatus = (tableId, newStatus) => {
@@ -376,36 +395,33 @@ export default function TablesPage() {
     }
   };
 
-  // Merge tables
-  const handleMerge = () => {
-    if (selectedForMerge.length < 2) return;
-    const mergedName = selectedForMerge.map(t => t.name).join(' + ');
-    const totalSeats = selectedForMerge.reduce((sum, t) => sum + t.seats, 0);
-    const mergedTable = {
-      id: `merged-${Date.now()}`,
-      number: selectedForMerge[0].number,
-      name: mergedName,
-      seats: totalSeats,
-      shape: 'Rectangle',
-      floorId: selectedForMerge[0].floorId,
-      status: 'Available',
-      currentOrderId: null,
-      mergedIds: selectedForMerge.map(t => t.id),
-    };
-    const idsToRemove = new Set(selectedForMerge.map(t => t.id));
-    setTables(prev => [...prev.filter(t => !idsToRemove.has(t.id)), mergedTable]);
-    setSelectedForMerge([]);
-    setMergeMode(false);
+  // ── Merge / Split Tables (DB-persisted MergeGroup + MergeGroupTable) ──
+  // Merge is executed by the existing backend order-merge API inside a tenant
+  // transaction. After any merge/split we refetch from the backend — the DB is
+  // the source of truth and client state is rebuilt from the API response.
+  const reloadAfterMergeChange = () => {
+    cachedTablesFetched = 0; // bypass 1-min cache
+    loadTables();
+    loadFloors();
+    if (typeof incrementRefreshTrigger === 'function') incrementRefreshTrigger();
   };
 
-  // Split table
-  const handleSplit = (mergedTable) => {
-    if (!mergedTable.mergedIds?.length) return;
-    const restored = mergedTable.mergedIds.map(id => {
-      const original = tables.find(t => t.id === id);
-      return original || { id, number: 0, name: 'Table', seats: 2, shape: 'Rectangle', floorId: selectedFloorId, status: 'Available', currentOrderId: null };
-    });
-    setTables(prev => [...prev.filter(t => t.id !== mergedTable.id), ...restored]);
+  const handleSplitGroupConfirm = async () => {
+    if (!splitConfirm || splitLoading) return;
+    setSplitLoading(true);
+    try {
+      await orderApi.splitOrders(splitConfirm.mergeGroupId);
+      addToast('Tables split successfully.', 'success');
+      setSplitConfirm(null);
+      setMergeModalMode(null);
+      reloadAfterMergeChange();
+    } catch (e) {
+      const msg = e?.message || 'Failed to split tables.';
+      addToast(msg, 'error');
+      setSplitConfirm(null);
+    } finally {
+      setSplitLoading(false);
+    }
   };
 
   const statusColors = {
@@ -430,30 +446,26 @@ export default function TablesPage() {
           <p className="text-[11px] text-slate-500">View real-time layout occupancy and manage guest seating.</p>
         </div>
         <div className="flex flex-wrap items-center justify-end gap-2">
-          {mergeMode && (
-            <button onClick={handleMerge} disabled={selectedForMerge.length < 2}
-              className="px-3 h-8 text-[10px] font-bold bg-emerald-600 text-white rounded-lg flex items-center gap-1 disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed">
-              <Merge className="w-3.5 h-3.5" /> Merge {selectedForMerge.length}
-            </button>
-          )}
-          {isAdmin && (
+          {isAdmin && settings?.enableMergeTables !== false && (
             <>
-              {!mergeMode && (
-                <button onClick={() => setMergeMode(true)}
-                  className="px-3 h-8 text-[10px] font-bold border border-slate-200 text-slate-600 hover:bg-slate-50 rounded-lg flex items-center gap-1 cursor-pointer">
-                  <Merge className="w-3.5 h-3.5" /> Merge
-                </button>
-              )}
-              {mergeMode && (
-                <button onClick={() => { setMergeMode(false); setSelectedForMerge([]); }}
-                  className="px-3 h-8 text-[10px] font-bold border border-red-200 text-red-600 hover:bg-red-50 rounded-lg cursor-pointer">Cancel Merge</button>
-              )}
-              <button onClick={() => setShowDesigner(p => !p)}
-                className={`px-3 h-8 text-[11px] font-bold border rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer ${showDesigner ? 'bg-slate-800 text-white border-slate-800' : 'bg-white text-slate-700 hover:bg-slate-50'}`}>
-                <Layers className="w-3.5 h-3.5" />
-                <span>{showDesigner ? 'Exit Designer' : 'Floor Designer'}</span>
+              <button onClick={() => setMergeModalMode('merge')}
+                className="px-3 h-8 text-[11px] font-bold border border-emerald-300 rounded-lg bg-white text-emerald-700 hover:bg-emerald-50 transition-colors flex items-center gap-1.5 cursor-pointer" title="Merge two or more occupied tables with active orders">
+                <Merge className="w-3.5 h-3.5" />
+                <span>Merge Tables</span>
+              </button>
+              <button onClick={() => setMergeModalMode('split')}
+                className="px-3 h-8 text-[11px] font-bold border border-amber-300 rounded-lg bg-white text-amber-700 hover:bg-amber-50 transition-colors flex items-center gap-1.5 cursor-pointer" title="Split / unmerge a merged table group">
+                <Split className="w-3.5 h-3.5" />
+                <span>Split Tables</span>
               </button>
             </>
+          )}
+          {isAdmin && (
+            <button onClick={() => setShowDesigner(p => !p)}
+              className={`px-3 h-8 text-[11px] font-bold border rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer ${showDesigner ? 'bg-slate-800 text-white border-slate-800' : 'bg-white text-slate-700 hover:bg-slate-50'}`}>
+              <Layers className="w-3.5 h-3.5" />
+              <span>{showDesigner ? 'Exit Designer' : 'Floor Designer'}</span>
+            </button>
           )}
         </div>
       </div>
@@ -489,8 +501,10 @@ export default function TablesPage() {
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
                 {filteredTables.map((tbl) => {
                   const isOccupied = tbl.status === 'Occupied';
-                  const isSelected = selectedForMerge.some(s => s.id === tbl.id);
-                  const isMerged = !!tbl.mergedIds;
+                  const isMerged = !!(tbl.mergeGroupId || tbl.mergedTableIds?.length);
+                  const mergedWith = isMerged
+                    ? (tbl.mergedTableNos || []).filter(n => String(n) !== String(tbl.tableNo ?? ''))
+                    : [];
 
                   return (
                     <div key={tbl.id} className="relative group">
@@ -507,16 +521,33 @@ export default function TablesPage() {
                           </button>
                         </div>
                       )}
+                      {/* Merged tables — quick explicit Split/Unmerge access (backend allows ADMIN/MANAGER only) */}
+                      {isMerged && isAdmin && (
+                        <div className="absolute -top-2 -right-2 z-10 flex gap-0.5 opacity-100 lg:opacity-0 lg:group-hover:opacity-100 transition-opacity">
+                          <button onClick={(e) => { e.stopPropagation(); setSplitConfirm({ mergeGroupId: tbl.mergeGroupId, label: (tbl.mergedTableNos || []).join(' + ') }); }}
+                            className="p-1.5 bg-white border border-emerald-300 rounded-lg shadow-sm hover:bg-emerald-50 text-emerald-600 hover:text-emerald-700 cursor-pointer" title="Split / Unmerge tables">
+                            <Split className="w-3 h-3" />
+                          </button>
+                        </div>
+                      )}
                     <div onClick={() => handleTableClick(tbl)}
                       className={`p-3 rounded-xl border cursor-pointer select-none transition-all flex flex-col justify-between min-h-[115px] hover:shadow-md ${
-                        isSelected ? 'ring-2 ring-emerald-500 border-emerald-500 bg-emerald-50' : statusColors[tbl.status] || statusColors.Available
-                      } ${mergeMode ? 'ring-1 ring-dashed' : ''}`}>
+                        isMerged ? 'ring-1 ring-emerald-300 border-emerald-300 bg-emerald-50/30' : statusColors[tbl.status] || statusColors.Available
+                      }`}>
                       <div className="flex justify-between items-start gap-1">
                         <div className="min-w-0 flex-1">
                           <p className="text-xs font-extrabold text-slate-800 truncate flex items-center gap-1">
                             {tbl.name}
                             {isMerged && <Merge className="w-3 h-3 text-emerald-600" />}
                           </p>
+                          {isMerged && (
+                            <p className="text-[8px] text-emerald-600 font-bold mt-0.5 flex items-center gap-1 flex-wrap">
+                              <span className="text-[7px] px-1 py-px rounded bg-emerald-600 text-white uppercase tracking-wide">Merged</span>
+                              {tbl.isPrimaryTable
+                                ? (mergedWith.length > 0 ? `Primary · with ${mergedWith.join(' + ')}` : 'Primary table')
+                                : (tbl.primaryTableNo ? `Part of Table ${tbl.primaryTableNo} group` : 'Part of merged group')}
+                            </p>
+                          )}
                           <p className="text-[10px] text-slate-400 font-medium mt-1">
                             {tbl.seats} Pax · {tbl.shape}
                           </p>
@@ -530,7 +561,7 @@ export default function TablesPage() {
                         <div className="mt-2.5">
                           <div className="flex justify-between text-[10px] text-slate-600 font-bold border-t border-red-100 pt-1.5">
                             <span className="flex items-center gap-0.5"><Users className="w-3 h-3 text-red-500" />{tbl.guestsCount || 2} Guests</span>
-                            <span className="text-[#C85A32] font-mono">₹{tbl.billAmount || 0}</span>
+                            <span className="text-[#C85A32] font-mono">{currency}{tbl.billAmount || 0}</span>
                           </div>
                           <p className="text-[8px] text-slate-400 font-bold mt-1 text-right">Click to Manage</p>
                         </div>
@@ -632,18 +663,42 @@ export default function TablesPage() {
                   </div>
                 </form>
 
-                {/* Merged Tables */}
-                {tables.filter(t => t.mergedIds).length > 0 && (
+                {/* DB Merge Groups (persisted in the tenant DB — not session state) */}
+                {tables.filter(t => t.mergeGroupId).length > 0 && (
                   <div className="space-y-1.5">
-                    <p className="text-[9px] font-bold uppercase text-slate-400">Merged Tables</p>
-                    {tables.filter(t => t.mergedIds).map(mt => (
-                      <div key={mt.id} className="flex items-center justify-between p-2 bg-amber-50 border border-amber-200 rounded-lg">
-                        <span className="text-[10px] font-bold text-slate-700">{mt.name}</span>
-                        <button onClick={() => handleSplit(mt)} className="text-[9px] font-bold text-amber-700 hover:text-amber-900 flex items-center gap-1 cursor-pointer">
-                          <Split className="w-3 h-3" /> Split
-                        </button>
-                      </div>
-                    ))}
+                    <p className="text-[9px] font-bold uppercase text-slate-400">Active Merge Groups</p>
+                    {(() => {
+                      const mergeGroups = {};
+                      tables.filter(t => t.mergeGroupId).forEach(t => {
+                        if (!mergeGroups[t.mergeGroupId]) mergeGroups[t.mergeGroupId] = [];
+                        mergeGroups[t.mergeGroupId].push(t);
+                      });
+                      return Object.entries(mergeGroups).map(([gid, tbls]) => {
+                        const primary = tbls.find(t => t.isPrimaryTable) || tbls[0];
+                        return (
+                          <div key={gid} className="p-2 bg-emerald-50 border border-emerald-200 rounded-lg">
+                            <div className="flex items-center gap-1 mb-1">
+                              <Merge className="w-3 h-3 text-emerald-600 shrink-0" />
+                              <span className="text-[10px] font-bold text-slate-700 flex items-center gap-1 flex-wrap">
+                                {tbls.map(t => t.name).join(' + ')}
+                                {primary?.isPrimaryTable && (
+                                  <span className="text-[7px] px-1 py-px rounded bg-emerald-600 text-white uppercase">Primary: {primary.name}</span>
+                                )}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between gap-2">
+                              <p className="text-[8px] text-slate-400 font-medium">
+                                Persisted in DB. Only an explicit Split/Unmerge reverses it.
+                              </p>
+                              <button onClick={() => setSplitConfirm({ mergeGroupId: Number(gid), label: tbls.map(t => t.name).join(' + ') })}
+                                className="shrink-0 px-2 h-6 rounded-md bg-white border border-amber-300 text-amber-700 text-[8px] font-bold hover:bg-amber-50 cursor-pointer">
+                                Split
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      });
+                    })()}
                   </div>
                 )}
               </div>
@@ -818,13 +873,11 @@ export default function TablesPage() {
                   (o.table?.name === occTbl.name)
                 );
                 if (tableOrder) {
+                  // Use the real backend order ID from cartStore
                   setActiveOrderTakingId(tableOrder.id);
                   setShowTakeOrderWizard(true);
-                } else if (occTbl?.currentOrderId) {
-                  // Use stored local order ID (before backend saves)
-                  setActiveOrderTakingId(occTbl.currentOrderId);
-                  setShowTakeOrderWizard(true);
                 } else {
+                  // No real backend order found — redirect to Active Orders
                   addToast('Could not find the order. Try Active Orders.', 'warning');
                   setScreen('active_orders');
                 }
@@ -852,11 +905,37 @@ export default function TablesPage() {
                 className="flex-[2] h-9 bg-[#16A34A] text-white rounded-lg text-xs font-bold cursor-pointer">Checkout</button>
               )}
             </div>
-            <button onClick={() => { setShowOccupiedModal(false); handleChangeStatus(selectedOccupiedTable.id, 'Available'); }}
-              className="w-full h-8 border border-red-200 text-red-600 rounded-lg text-[10px] font-bold hover:bg-red-50 cursor-pointer">Mark Available</button>
+            {selectedOccupiedTable?.isMerged ? (
+              <button onClick={() => { const occ = selectedOccupiedTable; setShowOccupiedModal(false); setSplitConfirm({ mergeGroupId: occ.mergeGroupId, label: (occ.mergedTableNos || []).join(' + ') }); }}
+                className="w-full h-8 border border-amber-300 bg-amber-50 text-amber-700 rounded-lg text-[10px] font-bold hover:bg-amber-100 cursor-pointer">Split Tables (Unmerge)</button>
+            ) : (
+              <button onClick={() => { setShowOccupiedModal(false); handleChangeStatus(selectedOccupiedTable.id, 'Available'); }}
+                className="w-full h-8 border border-red-200 text-red-600 rounded-lg text-[10px] font-bold hover:bg-red-50 cursor-pointer">Mark Available</button>
+            )}
           </div>
         </div>
       )}
+
+      {/* Merge Tables / Split Tables modal (uses the existing backend merge/split APIs) */}
+      <TableMergeModal
+        mode={mergeModalMode}
+        onClose={() => setMergeModalMode(null)}
+        onSplitRequested={(group) => setSplitConfirm(group)}
+        onChanged={reloadAfterMergeChange}
+      />
+
+      {/* Split Tables confirmation — only an explicit user action may reverse a merge */}
+      <ConfirmationDialog
+        isOpen={!!splitConfirm}
+        onClose={() => { if (!splitLoading) setSplitConfirm(null); }}
+        onConfirm={handleSplitGroupConfirm}
+        title="Split Tables?"
+        message={`Split "${splitConfirm?.label || ''}" back into separate tables? A merged group stays merged until you do this.`}
+        confirmLabel="Split"
+        cancelLabel="Cancel"
+        variant="warning"
+        isLoading={splitLoading}
+      />
     </div>
   );
 }

@@ -236,11 +236,11 @@ export const hasFeature = (subscription, feature) => {
 // Centralized rule: a screen is available in a business mode only when the
 // mode is in its allowed list. Screens not listed here are available in every
 // mode (subject to role / plan / settings checks).
-// POS Ordering (order_taking) is a counter/hybrid workflow — never Restaurant.
 export const BUSINESS_MODE_SCREENS = {
   // New Order (full-page TakeOrderWizard) — Restaurant mode only
   new_order: ['restaurant'],
-  // POS Ordering (existing POS screen) — Counter & Hybrid modes
+  // order_taking (Basic POS / Counter screen) — counter & hybrid modes only
+  // Restaurant mode uses new_order (TakeOrderWizard) as its order entry point
   order_taking: ['counter', 'hybrid'],
 };
 
@@ -292,7 +292,7 @@ export const ROLE_DEFAULT_SCREENS = {
   MANAGER: 'dashboard',
   CASHIER: 'order_taking',
   KITCHEN: 'orders',
-  WAITER: 'tables',
+  WAITER: 'order_taking',
 };
 
 /** Get the default landing screen for a given role */

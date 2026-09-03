@@ -17,6 +17,11 @@ let cachedStaff = null;
 let cachedStaffFetched = 0;
 const CACHE_TTL = 60000; // 1 minute
 
+// Single-flight guard: React StrictMode mounts the page twice in dev, and the
+// axios dedup layer makes both callers share ONE promise. Without this guard a
+// failed load surfaces as two identical error toasts and duplicate requests.
+let staffLoadInFlight = false;
+
 export default function StaffPage() {
   const { addToast } = useUiStore();
   const [staff, setStaff] = useState(cachedStaff || []);
@@ -54,14 +59,27 @@ export default function StaffPage() {
   }, []);
 
   const loadStaff = async (showRetryToast = false) => {
+    if (staffLoadInFlight) return; // skip duplicate mounts/refresh while one load is running
+    staffLoadInFlight = true;
     setLoading(true);
     setError(null);
     try {
       const resp = await userApi.getAll();
-      if (!resp.data || !Array.isArray(resp.data)) {
+      // Backend envelope: { success, data: { users: [...], pagination } }
+      // (see user.controller getUsers / successResponse). Accept the staff
+      // list wherever it legitimately lives so a shape change can never turn
+      // into an empty roster or a spurious format error.
+      const list = Array.isArray(resp?.data?.users)
+        ? resp.data.users
+        : Array.isArray(resp?.data)
+          ? resp.data
+          : Array.isArray(resp?.users)
+            ? resp.users
+            : null;
+      if (!list) {
         throw new Error('Invalid response format from server');
       }
-      const mapped = resp.data.map((u) => ({
+      const mapped = list.map((u) => ({
         id: `staff-${u.id}`,
         firstName: u.name?.split(' ')[0] || u.name || 'User',
         lastName: u.name?.split(' ').slice(1).join(' ') || '',
@@ -83,7 +101,7 @@ export default function StaffPage() {
       setError(e.message || 'Failed to load staff data. Please try again.');
       addToast(e.message || 'Failed to load staff data.', 'error');
     }
-    finally { setLoading(false); }
+    finally { staffLoadInFlight = false; setLoading(false); }
   };
 
   const mapRoleFromBackend = (role) => {

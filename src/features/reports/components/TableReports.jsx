@@ -3,6 +3,7 @@ import { Bar } from 'react-chartjs-2';
 import { LayoutGrid, TrendingUp } from 'lucide-react';
 import { formatCurrency } from '../../../lib/utils';
 import ReportExportBar from '../../../components/common/ReportExportBar';
+import { useSettingsStore } from '../../../store';
 
 const chartFont = { family: "'Inter', 'Segoe UI', sans-serif", size: 9 };
 const chartDefaults = { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } };
@@ -11,6 +12,8 @@ const STATUS_COLORS = { AVAILABLE: 'bg-emerald-100 text-emerald-800', OCCUPIED: 
 export default function TableReports({ tableSales, tableOccupancy, loading, formatCurrency: fc }) {
   const [subTab, setSubTab] = useState('sales');
   const fcVal = fc || formatCurrency;
+  const { settings } = useSettingsStore();
+  const currencySymbol = settings?.currencySymbol || '₹';
 
   if (loading) return null;
 
@@ -42,7 +45,7 @@ export default function TableReports({ tableSales, tableOccupancy, loading, form
               <h4 className="text-[10px] font-extrabold text-slate-800 uppercase tracking-wider mb-3 flex items-center gap-1.5">
                 <TrendingUp className="w-3.5 h-3.5 text-[#16A34A]" /> Table Sales Distribution
               </h4>
-              <div className="h-48"><Bar data={tableChartData} options={{ ...chartDefaults, scales: { x: { grid: { display: false }, ticks: { font: chartFont } }, y: { beginAtZero: true, ticks: { font: chartFont, callback: v => '₹' + v } } } }} /></div>
+              <div className="h-48"><Bar data={tableChartData} options={{ ...chartDefaults, scales: { x: { grid: { display: false }, ticks: { font: chartFont } }, y: { beginAtZero: true, ticks: { font: chartFont, callback: v => currencySymbol + v } } } }} /></div>
             </div>
           )}
           <div className="bg-white rounded-[18px] border border-slate-200 shadow-xs overflow-hidden">

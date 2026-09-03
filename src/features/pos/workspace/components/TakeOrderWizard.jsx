@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   X, ChevronRight, Check, ShoppingCart, Users,
   UtensilsCrossed, Search, Plus, Minus, Trash2,
-  CreditCard, Wallet, Smartphone, AlertTriangle,
+  CreditCard, Smartphone, AlertTriangle,
   Clock, Printer, FileText, Save, Play, Ban,
   ArrowRight, ArrowLeft, Building2, ChefHat,
   User, Coffee, DollarSign, Loader2,
@@ -77,6 +77,7 @@ export default function TakeOrderWizard({ mode = 'modal' } = {}) {
   const { showTakeOrderWizard, setShowTakeOrderWizard, setScreen, addToast, activeOrderTakingId, setActiveOrderTakingId, setOrdersActiveTab, currentScreen, incrementRefreshTrigger, setCheckoutOrderId } = useUiStore();
   const { addOrder } = useCartStore();
   const { settings } = useSettingsStore();
+  const currency = settings?.currencySymbol || '₹';
   const { user } = useAuthStore();
   const isServiceStaff = (user?.role || '').toUpperCase() === 'WAITER';
 
@@ -109,9 +110,11 @@ export default function TakeOrderWizard({ mode = 'modal' } = {}) {
   const [waiters, setWaiters] = useState([]);
   const [selectedWaiter, setSelectedWaiter] = useState(null);
   const [waiterLoading, setWaiterLoading] = useState(false);
+  const [waiterError, setWaiterError] = useState(false);
 
   // ── Customer ──
   const [customers, setCustomers] = useState([]);
+  const [customerError, setCustomerError] = useState(false);
   const [showCustomerSearch, setShowCustomerSearch] = useState(false);
   const [customerSearch, setCustomerSearch] = useState('');
   const [selectedCustomer, setSelectedCustomer] = useState(null);
@@ -190,7 +193,10 @@ export default function TakeOrderWizard({ mode = 'modal' } = {}) {
     resetWizard();
     setDataLoading(true);
     try {
-      await Promise.all([
+      // Load every dataset independently — each loader already isolates its own
+      // errors, and Promise.allSettled guarantees an optional failure (waiters,
+      // customers, floors…) can never abort menu/table/order initialization.
+      await Promise.allSettled([
         loadMenu(),
         loadCategories(),
         loadTables(),
@@ -201,8 +207,12 @@ export default function TakeOrderWizard({ mode = 'modal' } = {}) {
       // If editing existing order, load it and pre-populate
       if (activeOrderTakingId) {
         try {
-          const backendOrderId = parseInt(activeOrderTakingId.replace('ord-', ''));
-          if (isNaN(backendOrderId)) throw new Error('Invalid order ID');
+          const backendOrderId = parseInt(activeOrderTakingId.replace('ord-', ''), 10);
+          if (!Number.isSafeInteger(backendOrderId) || backendOrderId <= 0) {
+            addToast('Invalid order ID — cannot load order.', 'error');
+            setActiveOrderTakingId(null);
+            return;
+          }
           const resp = await orderApi.getById(backendOrderId);
           if (resp?.data) {
             const orderData = resp.data;
@@ -268,6 +278,8 @@ export default function TakeOrderWizard({ mode = 'modal' } = {}) {
     setSelectedCustomer(null);
     setCustomerName('');
     setCustomerPhone('');
+    setWaiterError(false);
+    setCustomerError(false);
     setSubmitting(null);
     setActionSuccess(null);
     setConfirmDialog(null);
@@ -333,15 +345,29 @@ export default function TakeOrderWizard({ mode = 'modal' } = {}) {
   const loadWaiters = async () => {
     setWaiterLoading(true);
     try {
-      const resp = await userApi.getAll();
-      const mapped = (resp.data || resp.users || []).map((u) => ({
+      // Dedicated waiter directory — works for every order-placing role,
+      // unlike GET /users which is staff-management only (403 for cashiers).
+      const resp = await userApi.getWaiters();
+      const waiters = Array.isArray(resp?.data?.users)
+        ? resp.data.users
+        : Array.isArray(resp?.data)
+          ? resp.data
+          : Array.isArray(resp?.users)
+            ? resp.users
+            : [];
+      const mapped = waiters.map((u) => ({
         id: u.id,
         name: u.name || 'Staff',
         role: u.role || '',
       }));
       setWaiters(mapped);
+      setWaiterError(false);
     } catch (e) {
-      console.error('Failed to load waiters:', e);
+      // Scoped failure: the rest of the wizard keeps working; the Service Staff
+      // selector shows an inline retry instead of blocking the order.
+      setWaiters([]);
+      setWaiterError(true);
+      console.warn('Failed to load waiters:', e);
     } finally {
       setWaiterLoading(false);
     }
@@ -377,12 +403,12 @@ export default function TakeOrderWizard({ mode = 'modal' } = {}) {
         phone: c.phone || '',
       }));
       setCustomers(mapped);
+      setCustomerError(false);
     } catch (e) {
-      // Customer API is optional — gracefully show empty list on failure
-      console.warn('Customer API unavailable, using empty list:', e.message);
+      // Customer API is optional — gracefully show empty list on failure.
+      // Scoped, non-blocking: the customer search shows an inline retry.
       setCustomers([]);
-      // Show a subtle notice, but don't block the wizard
-      addToast('Customer list unavailable. You can still continue with the order.', 'warning');
+      setCustomerError(true);
     }
   };
 
@@ -463,8 +489,8 @@ export default function TakeOrderWizard({ mode = 'modal' } = {}) {
         ...payload,
         notes: (payload.notes ? payload.notes + '; ' : '') + 'Placed on hold',
       });
-      if (resp.success && resp.data) {
-        const orderData = resp.data;
+      const orderData = resp?.success ? resp.data : resp;
+      if (orderData && orderData.id) {
         await orderApi.hold(orderData.id);
 
         // KOT is auto-created by backend during order creation — nothing more needed
@@ -512,76 +538,72 @@ export default function TakeOrderWizard({ mode = 'modal' } = {}) {
     try {
       const payload = buildOrderPayload();
       const resp = await orderApi.create(payload);
-      if (resp.success && resp.data) {
-        const orderData = resp.data;
-        
-        // Update table status if dine-in
-        if (needsTable && selectedTable) {
-          const tableBackendId = getBackendId(selectedTable.id, 't-');
-          if (tableBackendId) {
-            try { await tableApi.updateStatus(tableBackendId, 'OCCUPIED'); } catch {}
-          }
-        }
-
-        // KOT is auto-created by backend during order creation — use it from response
-        let kotNo = null;
-        if (orderData.kot?.length > 0) {
-          kotNo = orderData.kot[0].kotNo;
-        } else {
-          // Fallback: try to create KOT if backend didn't auto-generate one
-          try {
-            const kotResp = await kotApi.create({ orderId: orderData.id, items: payload.items });
-            kotNo = kotResp?.data?.kotNo || kotResp?.kotNo || null;
-          } catch (e) {
-            console.warn('KOT generation failed:', e);
-          }
-        }
-        
-        // Open KOT print preview using shared service
-        try {
-          openKotPrintPreview({
-            restaurantName: settings?.branding?.restaurantName || '',
-            kotNo: kotNo,
-            orderNo: orderData.orderNo || String(orderData.id),
-            tableNo: selectedTable?.name || '',
-            orderType: orderType === 'dine_in' ? 'DINE_IN' : 'TAKEAWAY',
-            waiterName: selectedWaiter?.name || '',
-            customerName: customerName || '',
-            customerPhone: customerPhone || '',
-            guestCount: guestCount || 1,
-            notes: '',
-            items: cart.map(c => ({ name: c.name, quantity: c.qty, notes: c.notes })),
-            footer: settings?.receiptFooterMessage || 'Thank You!',
-            date: new Date()
-          });
-        } catch (printErr) {
-          console.warn('KOT print preview failed:', printErr);
-        }
-
-        // Add to local store
-        addOrder({
-          id: `ord-${orderData.id}`,
-          orderNumber: `#${orderData.orderNo || orderData.id}`,
-          tableName: selectedTable?.name || 'Takeaway',
-          guestsCount: guestCount,
-          timestamp: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
-          serverName: selectedWaiter?.name || 'Staff',
-          status: 'PREP',
-          items: cart.map(c => ({ itemId: c.itemId, name: c.name, price: c.price, quantity: c.qty, status: 'Pending', notes: c.notes })),
-          orderType: orderType === 'dine_in' ? 'Dine In' : 'Takeaway',
-          discountAmount: 0,
-          paymentStatus: 'Pending',
-        });
-
-        incrementRefreshTrigger();
-        setActionSuccess('kot');
-        addToast(`KOT printed for Order ${orderData.orderNo || orderData.id}!`, 'success');
-        setShowTakeOrderWizard(false);
-        const prevScreen = previousScreenRef.current;
-        if (prevScreen && prevScreen !== 'order_taking') setScreen(prevScreen);
+      const orderData = resp?.success ? resp.data : resp;
+      if (!orderData || !orderData.id) {
+        throw new Error('Order creation failed — no order data returned');
       }
+
+      // Update table status if dine-in
+      if (needsTable && selectedTable) {
+        const tableBackendId = getBackendId(selectedTable.id, 't-');
+        if (tableBackendId) {
+          try { await tableApi.updateStatus(tableBackendId, 'OCCUPIED'); } catch {}
+        }
+      }
+
+      // KOT is auto-created by backend during order creation.
+      // The response includes order.kot[] with the auto-KOT.
+      // NEVER create a second KOT — the backend will reject it as "no new items".
+      const autoKot = orderData.kot?.[0] || null;
+      const kotNo = autoKot?.kotNo || null;
+
+      // Open KOT print preview using shared service
+      // For new orders, print from cart items (the auto-KOT contains ALL items)
+      try {
+        openKotPrintPreview({
+          restaurantName: settings?.branding?.restaurantName || '',
+          kotNo: kotNo || 'N/A',
+          orderNo: orderData.orderNo || String(orderData.id),
+          tableNo: selectedTable?.name || '',
+          orderType: orderType === 'dine_in' ? 'DINE_IN' : 'TAKEAWAY',
+          waiterName: selectedWaiter?.name || '',
+          customerName: customerName || '',
+          customerPhone: customerPhone || '',
+          guestCount: guestCount || 1,
+          notes: '',
+          items: cart.map(c => ({ name: c.name, quantity: c.qty, notes: c.notes })),
+          footer: settings?.receiptFooterMessage || 'Thank You!',
+          date: new Date()
+        });
+      } catch (printErr) {
+        // KOT print preview failed — non-critical
+        addToast('KOT created but print preview failed. You can reprint from Active Orders.', 'warning');
+      }
+
+      // Add to local store
+      addOrder({
+        id: `ord-${orderData.id}`,
+        orderNumber: `#${orderData.orderNo || orderData.id}`,
+        tableName: selectedTable?.name || 'Takeaway',
+        guestsCount: guestCount,
+        timestamp: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
+        serverName: selectedWaiter?.name || 'Staff',
+        status: 'PREP',
+        items: cart.map(c => ({ itemId: c.itemId, name: c.name, price: c.price, quantity: c.qty, status: 'Pending', notes: c.notes })),
+        orderType: orderType === 'dine_in' ? 'Dine In' : 'Takeaway',
+        discountAmount: 0,
+        paymentStatus: 'Pending',
+      });
+
+      incrementRefreshTrigger();
+      setActionSuccess('kot');
+      addToast(`KOT created for Order ${orderData.orderNo || orderData.id}!`, 'success');
+      setShowTakeOrderWizard(false);
+      const prevScreen = previousScreenRef.current;
+      if (prevScreen && prevScreen !== 'order_taking') setScreen(prevScreen);
     } catch (e) {
-      addToast(e.message || 'Failed to create order', 'error');
+      const msg = e?.response?.data?.message || e?.message || 'Failed to create order';
+      addToast(msg, 'error');
     } finally {
       submittingRef.current = false;
       setSubmitting(null);
@@ -597,8 +619,8 @@ export default function TakeOrderWizard({ mode = 'modal' } = {}) {
     try {
       const payload = buildOrderPayload();
       const resp = await orderApi.create(payload);
-      if (resp.success && resp.data) {
-        const orderData = resp.data;
+      const orderData = resp?.success ? resp.data : resp;
+      if (orderData && orderData.id) {
 
         // KOT is auto-created by backend during order creation — nothing more needed
 
@@ -668,26 +690,62 @@ export default function TakeOrderWizard({ mode = 'modal' } = {}) {
       for (const item of cart) {
         const menuBackendId = parseInt(item.itemId.replace('menu-', ''));
         if (menuBackendId) {
-          await orderApi.addItem(backendId, {
-            menuItemId: menuBackendId,
-            quantity: item.qty,
-            notes: item.notes || undefined,
-          });
+          try {
+            await orderApi.addItem(backendId, {
+              menuItemId: menuBackendId,
+              quantity: item.qty,
+              notes: item.notes || undefined,
+            });
+          } catch (addItemErr) {
+            console.error('Failed to add item:', addItemErr);
+            addToast(`Failed to add ${item.name}: ${addItemErr.message || 'unknown error'}`, 'error');
+          }
         }
       }
       
-      // Generate new KOT with only the newly added items
+      // Generate new KOT with only the newly added items.
+      // Backend calculates delta from KOTItem history, so only unsent items are included.
       try {
-        const menuItemIds = cart.map(c => ({
-          menuItemId: parseInt(c.itemId.replace('menu-', '')),
-          quantity: c.qty,
-          notes: c.notes || undefined,
-        })).filter(i => i.menuItemId);
-        if (menuItemIds.length > 0 && settings.enableKitchen !== false) {
-          await kotApi.create({ orderId: backendId, items: menuItemIds });
+        if (cart.length > 0 && settings.enableKitchen !== false) {
+          const kotResp = await kotApi.create({ orderId: backendId });
+          // Backend returns { success: true, data: { created, kot, kotItems } }
+          const kotData = kotResp?.data || kotResp;
+          // If no new items, backend returns created=false — this is normal, not an error
+          if (kotData?.created === false || !kotData?.kotNo) {
+            addToast('No new items to send to kitchen.', 'info');
+          } else {
+            const kotNo = kotData?.kotNo || null;
+            // Print KOT using KOTItems from response (only delta items)
+            try {
+              openKotPrintPreview({
+                restaurantName: settings?.branding?.restaurantName || '',
+                kotNo: kotNo || 'N/A',
+                orderNo: String(backendId),
+                tableNo: '',
+                orderType: 'DINE_IN',
+                waiterName: '',
+                customerName: '',
+                customerPhone: '',
+                guestCount: 1,
+                notes: '',
+                items: (kotData?.kotItems || []).map(ki => ({
+                  name: ki.menuItem?.name || 'Item',
+                  quantity: ki.quantity || 1,
+                  notes: ki.notes || ''
+                })),
+                footer: settings?.receiptFooterMessage || 'Thank You!',
+                date: new Date()
+              });
+            } catch (printErr) {
+              // KOT print preview failed — non-critical
+            }
+          }
         }
-      } catch {
-        console.warn('KOT generation for new items failed');
+      } catch (kotErr) {
+        const msg = kotErr?.message || '';
+        // Real errors only — 'No new items' is now handled as a 200 success above
+        // KOT generation failed — toast already shown
+        addToast('Items added but KOT generation failed. You can reprint from Active Orders.', 'warning');
       }
 
       incrementRefreshTrigger();
@@ -926,6 +984,13 @@ export default function TakeOrderWizard({ mode = 'modal' } = {}) {
         </div>
         {waiterLoading ? (
           <div className="text-[10px] text-slate-400 italic">Loading staff...</div>
+        ) : waiterError && waiters.length === 0 ? (
+          <div className="flex items-center justify-between gap-2 bg-red-50 border border-red-100 rounded-lg px-2.5 py-1.5">
+            <span className="text-[10px] text-red-500 italic">Staff list unavailable.</span>
+            <button onClick={loadWaiters} className="text-[9px] font-bold text-blue-600 hover:underline cursor-pointer">Retry</button>
+          </div>
+        ) : waiters.length === 0 ? (
+          <div className="text-[10px] text-slate-400 italic">No service staff found.</div>
         ) : (
           <div className="flex flex-wrap gap-1.5">
             {waiters.map(w => (
@@ -1053,7 +1118,7 @@ export default function TakeOrderWizard({ mode = 'modal' } = {}) {
                   </span>
                   {/* Price badge */}
                   <span className="absolute bottom-1.5 right-1.5 bg-slate-900/80 text-white font-mono text-[10px] font-bold px-1.5 py-0.5 rounded">
-                    ₹{item.price}
+                    {currency}{item.price}
                   </span>
 
                   {/* In-cart quantity badge */}
@@ -1067,7 +1132,7 @@ export default function TakeOrderWizard({ mode = 'modal' } = {}) {
                 <div className="p-2.5">
                   <p className="text-[12px] font-extrabold text-slate-800 truncate leading-tight mb-1">{item.name}</p>
                   <div className="flex items-center justify-between">
-                    <span className="text-[13px] font-bold text-[#16A34A] font-mono">₹{item.price}</span>
+                    <span className="text-[13px] font-bold text-[#16A34A] font-mono">{currency}{item.price}</span>
                     {outOfStock ? (
                       <span className="text-[9px] font-bold text-red-500">Sold Out</span>
                     ) : item.stockStatus === 'Available' ? (
@@ -1168,22 +1233,22 @@ export default function TakeOrderWizard({ mode = 'modal' } = {}) {
                 </div>
                 {item.notes && <p className="text-[9px] text-amber-700 font-semibold mt-0.5">📝 {item.notes}</p>}
               </div>
-              <span className="font-mono font-bold text-xs text-slate-700 shrink-0 ml-2">₹{(item.price * item.qty).toFixed(0)}</span>
+              <span className="font-mono font-bold text-xs text-slate-700 shrink-0 ml-2">{currency}{(item.price * item.qty).toFixed(0)}</span>
             </div>
           ))}
         </div>
 
         {/* Totals */}
         <div className="bg-slate-50 rounded-xl border border-slate-200 p-3.5 space-y-1.5 text-xs">
-          <div className="flex justify-between text-slate-600"><span>Subtotal</span><span className="font-mono font-bold">₹{subtotal.toFixed(0)}</span></div>
+          <div className="flex justify-between text-slate-600"><span>Subtotal</span><span className="font-mono font-bold">{currency}{subtotal.toFixed(0)}</span></div>
           {settings?.taxType === 'Exclusive' && (
-            <div className="flex justify-between text-slate-500"><span>GST ({gstRate}%)</span><span className="font-mono">₹{taxAmount.toFixed(0)}</span></div>
+            <div className="flex justify-between text-slate-500"><span>GST ({gstRate}%)</span><span className="font-mono">{currency}{taxAmount.toFixed(0)}</span></div>
           )}
           {serviceCharge > 0 && (
-            <div className="flex justify-between text-slate-500"><span>Service Charge ({serviceCharge}%)</span><span className="font-mono">₹{serviceChargeAmount.toFixed(0)}</span></div>
+            <div className="flex justify-between text-slate-500"><span>Service Charge ({serviceCharge}%)</span><span className="font-mono">{currency}{serviceChargeAmount.toFixed(0)}</span></div>
           )}
           <div className="flex justify-between font-extrabold text-sm text-slate-800 border-t border-slate-200 pt-2 mt-2">
-            <span>Grand Total</span><span className="font-mono text-[#16A34A]">₹{grandTotal.toFixed(0)}</span>
+            <span>Grand Total</span><span className="font-mono text-[#16A34A]">{currency}{grandTotal.toFixed(0)}</span>
           </div>
           {settings?.taxType === 'Inclusive' && gstRate > 0 && (
             <div className="text-[9px] text-slate-400 italic text-right">(incl. GST {gstRate}%)</div>
@@ -1206,7 +1271,7 @@ export default function TakeOrderWizard({ mode = 'modal' } = {}) {
                       <span className="font-mono font-bold text-blue-600 shrink-0">{item.qty}x</span>
                       <span className="font-semibold text-slate-700 truncate">{item.name}</span>
                     </div>
-                    <span className="font-mono font-bold text-slate-600 shrink-0 ml-1">₹{(item.price * item.qty).toFixed(0)}</span>
+                    <span className="font-mono font-bold text-slate-600 shrink-0 ml-1">{currency}{(item.price * item.qty).toFixed(0)}</span>
                   </div>
                 ))}
               </div>
@@ -1253,7 +1318,7 @@ export default function TakeOrderWizard({ mode = 'modal' } = {}) {
               className="p-3 border-2 border-emerald-200 rounded-2xl hover:border-[#16A34A] hover:bg-emerald-50 transition-all text-center cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed">
               <DollarSign className="w-5 h-5 text-emerald-600 mx-auto mb-1" />
               <p className="text-[10px] font-extrabold text-emerald-700">Save & Pay</p>
-              <p className="text-[8px] text-emerald-500 mt-0.5">Proceed to payment, ₹{grandTotal.toFixed(0)}</p>
+              <p className="text-[8px] text-emerald-500 mt-0.5">Proceed to payment, {currency}{grandTotal.toFixed(0)}</p>
             </button>
             )}
           </div>
@@ -1421,6 +1486,12 @@ export default function TakeOrderWizard({ mode = 'modal' } = {}) {
             <input value={customerSearch} onChange={(e) => setCustomerSearch(e.target.value)}
               placeholder="Search customers by name or phone..."
               className="w-full h-9 px-2 bg-slate-50 border border-slate-200 rounded-lg text-xs outline-none focus:border-blue-400" autoFocus />
+            {customerError && (
+              <div className="flex items-center justify-between gap-2 bg-red-50 border border-red-100 rounded-lg px-2.5 py-1.5 mb-2">
+                <span className="text-[10px] text-red-500 italic">Couldn't load customer list.</span>
+                <button onClick={loadCustomers} className="text-[9px] font-bold text-blue-600 hover:underline cursor-pointer">Retry</button>
+              </div>
+            )}
             <div className="max-h-40 overflow-y-auto space-y-1">
               {customers.filter(c => c.name.toLowerCase().includes(customerSearch.toLowerCase()) || c.phone.includes(customerSearch)).map(c => (
                 <button key={c.id} onClick={() => { setSelectedCustomer(c); setShowCustomerSearch(false); setCustomerSearch(''); }}

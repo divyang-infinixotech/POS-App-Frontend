@@ -101,29 +101,42 @@ export default function PlatformReports() {
     }
 
     if (activeType === 'restaurant_activity') {
+      // Platform activity only — account lifecycle signals (last ADMIN login,
+      // status, plan, subscription), never tenant operational order counts.
+      const renderActivityList = (items, highlight) => (
+        <div className="space-y-1">
+          {items?.length === 0 && <p className="text-xs text-slate-400 py-2 text-center">No data</p>}
+          {items?.map((r, i) => (
+            <div key={i} className="py-2 border-b border-slate-50 last:border-0">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-bold text-slate-700">{r.name}</span>
+                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 shrink-0">{r.plan || '—'}</span>
+              </div>
+              <div className="flex items-center justify-between gap-2 mt-1">
+                <span className="text-[10px] text-slate-400">
+                  {r.lastLogin ? `Last login: ${new Date(r.lastLogin).toLocaleString()}` : 'Never logged in'}
+                </span>
+                <span className={`text-[10px] font-bold shrink-0 ${highlight}`}>
+                  {r.subscriptionStatus || r.status || '—'}
+                </span>
+              </div>
+              <p className="text-[10px] text-slate-400 mt-0.5">
+                Created {r.createdAt ? new Date(r.createdAt).toLocaleDateString() : '—'}
+                {r.expiryDate ? ` · Renews ${new Date(r.expiryDate).toLocaleDateString()}` : ''}
+              </p>
+            </div>
+          ))}
+        </div>
+      );
       return (
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <h4 className="text-xs font-bold text-slate-600 mb-2">Most Active</h4>
-            <div className="space-y-1">
-              {data.mostActive?.map((r, i) => (
-                <div key={i} className="flex items-center justify-between py-1.5 border-b border-slate-50">
-                  <span className="text-xs text-slate-600">{r.name}</span>
-                  <span className="text-xs font-bold text-green-600">{r.orderCount} orders</span>
-                </div>
-              ))}
-            </div>
+            <h4 className="text-xs font-bold text-slate-600 mb-2">Recently Active</h4>
+            {renderActivityList(data.recentlyActive, 'text-green-600')}
           </div>
           <div>
             <h4 className="text-xs font-bold text-slate-600 mb-2">Least Active</h4>
-            <div className="space-y-1">
-              {data.leastActive?.map((r, i) => (
-                <div key={i} className="flex items-center justify-between py-1.5 border-b border-slate-50">
-                  <span className="text-xs text-slate-600">{r.name}</span>
-                  <span className="text-xs font-bold text-red-500">{r.orderCount} orders</span>
-                </div>
-              ))}
-            </div>
+            {renderActivityList(data.leastActive, 'text-red-500')}
           </div>
         </div>
       );
