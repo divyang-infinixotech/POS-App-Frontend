@@ -252,91 +252,95 @@ const useSettingsStore = create((set, get) => ({
         // Also load printers if the API returns them
         const printersFromBackend = resp.printers || [];
         
-        set((state) => {
+        set(() => {
           // ── Restore the full persisted UI snapshot from the DB first ──
           // (taxes, screen/panel toggles, display modes, formats, security, etc.)
           // Explicit DB columns below are then applied ON TOP so they stay canonical.
+          // The baseline is rebuilt from defaults + this terminal's UI-only cache
+          // on EVERY fetch — never from the previous restaurant's session state —
+          // so logging into another restaurant can never see stale settings bleed.
+          const base = getInitialSettings();
           const persistedUi = (s.uiSettings && typeof s.uiSettings === 'object') ? s.uiSettings : {};
           const newSettings = {
-            ...state.settings,
+            ...base,
             ...persistedUi,
             branding: {
-              ...state.settings.branding,
+              ...base.branding,
               ...(persistedUi.branding || {}),
-              restaurantName: s.restaurantName || state.settings.branding.restaurantName,
-              logo: s.logo || state.settings.branding.logo,
-              loginLogo: s.logo || state.settings.branding.loginLogo,
-              sidebarLogo: s.logo || state.settings.branding.sidebarLogo,
-              receiptLogo: s.logo || state.settings.branding.receiptLogo,
-              invoiceLogo: s.logo || state.settings.branding.invoiceLogo,
+              restaurantName: s.restaurantName || base.branding.restaurantName,
+              logo: s.logo || base.branding.logo,
+              loginLogo: s.logo || base.branding.loginLogo,
+              sidebarLogo: s.logo || base.branding.sidebarLogo,
+              receiptLogo: s.logo || base.branding.receiptLogo,
+              invoiceLogo: s.logo || base.branding.invoiceLogo,
             },
             // Restaurant info
-            gstNumber: s.gstNumber || state.settings.gstNumber,
-            fssaiNumber: s.fssaiNumber || state.settings.fssaiNumber,
-            gstPercentage: Number(s.taxPercentage ?? state.settings.gstPercentage),
-            serviceCharge: Number(s.serviceCharge ?? state.settings.serviceCharge),
-            address: s.address || state.settings.address,
-            contactNumber: s.phone || state.settings.contactNumber,
-            email: s.email || state.settings.email,
-            website: s.website || state.settings.website,
+            gstNumber: s.gstNumber || base.gstNumber,
+            fssaiNumber: s.fssaiNumber || base.fssaiNumber,
+            gstPercentage: Number(s.taxPercentage ?? base.gstPercentage),
+            serviceCharge: Number(s.serviceCharge ?? base.serviceCharge),
+            address: s.address || base.address,
+            contactNumber: s.phone || base.contactNumber,
+            email: s.email || base.email,
+            website: s.website || base.website,
             
             // Billing
-            receiptFooterMessage: s.receiptFooter || state.settings.receiptFooterMessage,
-            billPrefix: s.billPrefix || state.settings.billPrefix,
-            billNumberStart: s.billNumberStart != null ? s.billNumberStart : state.settings.billNumberStart,
-            invoicePrefix: s.invoicePrefix || state.settings.invoicePrefix,
-            kotPrefix: s.kotPrefix || state.settings.kotPrefix,
-            roundOffEnabled: s.roundOffEnabled != null ? s.roundOffEnabled : state.settings.roundOffEnabled,
+            receiptFooterMessage: s.receiptFooter || base.receiptFooterMessage,
+            billPrefix: s.billPrefix || base.billPrefix,
+            billNumberStart: s.billNumberStart != null ? s.billNumberStart : base.billNumberStart,
+            invoicePrefix: s.invoicePrefix || base.invoicePrefix,
+            kotPrefix: s.kotPrefix || base.kotPrefix,
+            roundOffEnabled: s.roundOffEnabled != null ? s.roundOffEnabled : base.roundOffEnabled,
             
             // Kitchen
-            kotScreenEnabled: s.enableKitchenDisplay ?? state.settings.kotScreenEnabled,
-            kotOptionalStatusEnabled: s.enableKotStatusTracking ?? state.settings.kotOptionalStatusEnabled,
+            kotScreenEnabled: s.enableKitchenDisplay ?? base.kotScreenEnabled,
+            kotOptionalStatusEnabled: s.enableKotStatusTracking ?? base.kotOptionalStatusEnabled,
             
             // Module visibility (from backend, fallback to defaults)
-            enableKitchen: s.enableKitchen ?? state.settings.enableKitchen,
-            enableBilling: s.enableBilling ?? state.settings.enableBilling,
-            enableHoldOrders: s.enableHoldOrders ?? state.settings.enableHoldOrders,
-            enableAddItem: s.enableAddItem ?? state.settings.enableAddItem,
-            enableSplitBill: s.enableSplitBill ?? state.settings.enableSplitBill,
-            enableTransferTable: s.enableTransferTable ?? state.settings.enableTransferTable,
-            enableMergeTables: s.enableMergeTables ?? state.settings.enableMergeTables,
-            enableFloorManagement: s.enableFloorManagement ?? state.settings.enableFloorManagement,
-            enableReports: s.enableReports ?? state.settings.enableReports,
-            enableMenu: s.enableMenu ?? state.settings.enableMenu,
-            enableStock: s.enableStock ?? state.settings.enableStock,
-            enableActiveOrders: s.enableActiveOrders ?? state.settings.enableActiveOrders,
-            enableTableReservations: s.enableTableReservations ?? state.settings.enableTableReservations,
+            enableKitchen: s.enableKitchen ?? base.enableKitchen,
+            enableBilling: s.enableBilling ?? base.enableBilling,
+            enableHoldOrders: s.enableHoldOrders ?? base.enableHoldOrders,
+            enableAddItem: s.enableAddItem ?? base.enableAddItem,
+            enableSplitBill: s.enableSplitBill ?? base.enableSplitBill,
+            enableTransferTable: s.enableTransferTable ?? base.enableTransferTable,
+            enableMergeTables: s.enableMergeTables ?? base.enableMergeTables,
+            enableFloorManagement: s.enableFloorManagement ?? base.enableFloorManagement,
+            enableReports: s.enableReports ?? base.enableReports,
+            enableMenu: s.enableMenu ?? base.enableMenu,
+            enableStock: s.enableStock ?? base.enableStock,
+            enableActiveOrders: s.enableActiveOrders ?? base.enableActiveOrders,
+            enableTableReservations: s.enableTableReservations ?? base.enableTableReservations,
             
             // Billing behavior
-            autoPrintBill: s.autoPrintBill ?? state.settings.autoPrintBill,
-            autoPrintKOT: s.autoPrintKOT ?? state.settings.autoPrintKOT,
-            multiplePayments: s.multiplePayments ?? state.settings.multiplePayments,
-            askCustomerBeforePrint: s.askCustomerBeforePrint ?? state.settings.askCustomerBeforePrint,
-            autoReleaseTable: s.autoReleaseTable ?? state.settings.autoReleaseTable,
-            splitBill: s.splitBill ?? state.settings.splitBill,
+            autoPrintBill: s.autoPrintBill ?? base.autoPrintBill,
+            autoPrintKOT: s.autoPrintKOT ?? base.autoPrintKOT,
+            multiplePayments: s.multiplePayments ?? base.multiplePayments,
+            askCustomerBeforePrint: s.askCustomerBeforePrint ?? base.askCustomerBeforePrint,
+            autoReleaseTable: s.autoReleaseTable ?? base.autoReleaseTable,
+            splitBill: s.splitBill ?? base.splitBill,
             
             // POS Config
-            currency: s.currency || state.settings.currency,
-            language: s.language || state.settings.language,
-            timezone: s.timezone || state.settings.timezone,
+            currency: s.currency || base.currency,
+            language: s.language || base.language,
+            timezone: s.timezone || base.timezone,
 
             // POS Ordering / Layout (explicit columns)
             enablePosOrdering: s.enablePosOrdering !== null && s.enablePosOrdering !== undefined
-              ? s.enablePosOrdering : state.settings.enablePosOrdering,
-            posLayout: s.posLayout || state.settings.posLayout || 'basic',
-            businessMode: s.businessMode || state.settings.businessMode || 'restaurant',
+              ? s.enablePosOrdering : base.enablePosOrdering,
+            posLayout: s.posLayout || base.posLayout || 'basic',
+            businessMode: s.businessMode || base.businessMode || 'restaurant',
             enableCounterSale: s.enableCounterSale !== null && s.enableCounterSale !== undefined
-              ? s.enableCounterSale : state.settings.enableCounterSale,
-            taxType: s.taxType || state.settings.taxType || 'Inclusive',
-            taxesAndCharges: Array.isArray(s.taxesAndCharges) ? s.taxesAndCharges : state.settings.taxesAndCharges,
+              ? s.enableCounterSale : base.enableCounterSale,
+            taxType: s.taxType || base.taxType || 'Inclusive',
+            taxesAndCharges: Array.isArray(s.taxesAndCharges) ? s.taxesAndCharges : base.taxesAndCharges,
             
             // System
-            openingTime: s.openingTime || state.settings.openingTime,
-            closingTime: s.closingTime || state.settings.closingTime,
-            businessDate: s.businessDate || state.settings.businessDate,
+            openingTime: s.openingTime || base.openingTime,
+            closingTime: s.closingTime || base.closingTime,
+            businessDate: s.businessDate || base.businessDate,
             
             // Printers from backend (if available)
-            printers: printersFromBackend.length > 0 ? printersFromBackend : state.settings.printers,
+            printers: printersFromBackend.length > 0 ? printersFromBackend : base.printers,
           };
           newSettings.currencySymbol = getCurrencySymbol(newSettings.currency);
 
@@ -371,8 +375,10 @@ const useSettingsStore = create((set, get) => ({
           return { settings: newSettings, loading: false, lastFetched: Date.now() };
         });
       } else {
-        // No settings yet - that's ok, use defaults
-        set({ loading: false, lastFetched: Date.now() });
+        // No settings row for this restaurant yet — reset to a clean baseline
+        // (defaults + this terminal's UI cache) so the previous restaurant's
+        // session state can never bleed into the new one.
+        set({ settings: getInitialSettings(), loading: false, lastFetched: Date.now() });
       }
     } catch (e) {
       set({ error: e.message || 'Failed to load settings', loading: false });

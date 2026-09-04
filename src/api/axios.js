@@ -10,7 +10,13 @@ const pendingRequests = new Map();
 
 function getRequestKey(config) {
   const params = config.params ? JSON.stringify(config.params) : '';
-  return `${config.method}:${config.url}:${JSON.stringify(config.data || '')}:${params}`;
+  // The auth token (i.e. the authenticated user/tenant) is part of the dedup
+  // key. Two requests to the SAME url are only deduplicated when they carry
+  // the SAME identity — otherwise an in-flight response from restaurant A
+  // could be handed to restaurant B's identical request after a logout/login
+  // switch on the same browser.
+  const token = config.headers?.Authorization || '';
+  return `${config.method}:${config.url}:${JSON.stringify(config.data || '')}:${params}:${token}`;
 }
 
 const apiClient = axios.create({

@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useCallback, lazy, Suspense } from 'react';
 import { Loader2 } from 'lucide-react';
+import { useQueryClient } from '@tanstack/react-query';
 import Sidebar from '../sidebar/Sidebar';
 import Header from '../header/Header';
 import { useAuthStore, useUiStore, useSettingsStore, useCartStore } from '../../../store';
@@ -300,6 +301,24 @@ export default function AppShell() {
   const { user, subscription, isUnlocked, isAuthenticated, sessionReady, restoreSession } = useAuthStore();
   const { settings, moduleVisibilityVersion } = useSettingsStore();
   const { toasts, apiError, clearApiError } = useUiStore();
+
+  // ── Cross-restaurant cache safety ──
+  // React Query caches fetched tenant data in memory. When a session ends (logout,
+  // lock + switch user, 401 expiry) the cache is cleared so the NEXT restaurant
+  // that logs in on this browser can never be served the previous restaurant's
+  // cached data (query keys are not tenant-scoped by design). Also covers a direct
+  // user switch without an intermediate logout.
+  const queryClient = useQueryClient();
+  const prevIdentityRef = useRef(null);
+  useEffect(() => {
+    const identity = user ? `${user.id}|${user.restaurantId ?? ''}|${user.role}` : null;
+    if (identity && prevIdentityRef.current && identity !== prevIdentityRef.current) {
+      queryClient.clear();
+    } else if (!identity && prevIdentityRef.current !== null) {
+      queryClient.clear();
+    }
+    prevIdentityRef.current = identity;
+  }, [user, queryClient]);
 
   // ── Restore session on mount (validate JWT, rehydrate user) ──
   useEffect(() => {
