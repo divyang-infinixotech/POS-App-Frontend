@@ -2,13 +2,14 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import {
   Check, Printer, X, Percent, CreditCard, Smartphone,
   SplitSquareVertical, RotateCcw,
-  Mail, ChevronLeft, Loader2, AlertTriangle, FileText, Search, ChevronRight, Pencil,
+  ChevronLeft, Loader2, AlertTriangle, FileText, Search, ChevronRight, Pencil,
 } from 'lucide-react';
 import { useCartStore, useUiStore, useSettingsStore, useAuthStore } from '../../../store';
 import { orderApi } from '../../../api/order.api';
 import { paymentApi } from '../../../api/payment.api';
 import { billApi } from '../../../api/bill.api';
 import { openBillPrintPreview } from '../../../services/printService';
+import { canHandleBilling } from '../../../utils/permissions';
 
 const PAYMENT_METHODS = [
   { key: 'CASH', label: 'Cash', icon: () => (
@@ -666,7 +667,7 @@ function SplitPayment({ onPaymentsChange, grandTotal, currency }) {
 }
 
 // ─── Success Screen — compact cashier summary from the persisted bill response ──
-function SuccessScreen({ bill, currency, cashReceived, onPrint, onReprint, onEmail, onDone }) {
+function SuccessScreen({ bill, currency, cashReceived, onPrint, onReprint, onDone }) {
   const payments = bill?.payments || [];
   const grandTotal = Number(bill?.grandTotal || 0);
   const amountPaid = payments.length > 0
@@ -792,14 +793,6 @@ function SuccessScreen({ bill, currency, cashReceived, onPrint, onReprint, onEma
           <RotateCcw className="w-3.5 h-3.5" /> Reprint
         </button>
         <button
-          onClick={onEmail}
-          className="flex-1 min-w-[110px] h-11 bg-white border border-slate-200 hover:bg-slate-50 text-slate-600 
-            font-bold rounded-xl text-[10px] uppercase tracking-wider transition-all 
-            flex items-center justify-center gap-1.5 cursor-pointer"
-        >
-          <Mail className="w-3.5 h-3.5" /> Email
-        </button>
-        <button
           onClick={onDone}
           className="flex-1 min-w-[110px] h-11 bg-slate-800 hover:bg-slate-900 text-white font-bold rounded-xl text-[10px] 
             uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 shadow-sm cursor-pointer"
@@ -819,6 +812,10 @@ export default function BillingPage() {
   const { checkoutOrderId, setCheckoutOrderId, addToast, incrementRefreshTrigger } = useUiStore();
   const { settings } = useSettingsStore();
   const { user } = useAuthStore();
+  // Payment collection is restricted to ADMIN / MANAGER / CASHIER (and SUPER_ADMIN).
+  // The overlay is never rendered for KITCHEN / WAITER, even if checkoutOrderId
+  // gets set through some non-UI path (e.g. a stale state from another session).
+  const canBill = canHandleBilling(user?.role);
 
   const [activeTab, setActiveTab] = useState('CASH');
   const [loading, setLoading] = useState(false);
@@ -938,6 +935,7 @@ export default function BillingPage() {
   // ── Handle Collect Payment ──
   const handleCollectPayment = async () => {
     if (!orderDetails || !checkoutOrderId) return;
+    if (!canBill) return; // KITCHEN / WAITER must never collect payment (defense in depth)
     if (collectingRef.current) return; // double-tap guard
 
     // Validate
@@ -1181,26 +1179,6 @@ export default function BillingPage() {
     }
   };
 
-  const handleEmail = async () => {
-    const billId = billData?.id || billData?.bill?.id;
-    if (!billId) {
-      addToast('No bill data available for emailing.', 'warning');
-      return;
-    }
-    // Use the persisted customer email when available — never a generated one
-    const customerEmail = billData?.order?.customer?.email || '';
-    if (!customerEmail) {
-      addToast('No email on file for this order — ask the customer for their email address.', 'warning');
-      return;
-    }
-    try {
-      await paymentApi.emailReceipt(billId);
-      addToast(`Receipt email queued for ${customerEmail}`, 'success');
-    } catch (e) {
-      addToast('Email failed: ' + (e.message || 'unknown error'), 'error');
-    }
-  };
-
   const handleDone = () => {
     setCheckoutOrderId(null);
     setSuccess(false);
@@ -1254,9 +1232,11 @@ export default function BillingPage() {
     setCurrentPage(1);
   }, [searchQuery]);
 
-  // ── Don't render anything if no checkout order is selected ──
-  // (must be after all hooks to keep React hook count consistent)
-  if (!checkoutOrderId) return null;
+  // ── Don't render anything if no checkout order is selected, or the user's
+  // role cannot handle billing (KITCHEN / WAITER) — the overlay is a payment
+  // surface and must never render for them. (must be after all hooks to keep
+  // React hook count consistent)
+  if (!checkoutOrderId || !canBill) return null;
 
   // Portrait/mobile (<lg): show the sticky bottom payment bar (Total + Collect)
   // so the primary action is always visible; tablet landscape/desktop keep the
@@ -1285,7 +1265,6 @@ export default function BillingPage() {
               cashReceived={lastCashReceived}
               onPrint={handlePrint}
               onReprint={handleReprint}
-              onEmail={handleEmail}
               onDone={handleDone}
             />
           </div>

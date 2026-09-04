@@ -3,12 +3,13 @@ import {
   Search, Plus, Minus, ShoppingCart, Trash, X, User, Phone, CreditCard,
   ArrowLeft, ChevronLeft, Package, LayoutGrid, UtensilsCrossed,
 } from 'lucide-react';
-import { useCartStore, useUiStore, useSettingsStore } from '../../../../store';
+import { useCartStore, useUiStore, useSettingsStore, useAuthStore } from '../../../../store';
 import { menuApi } from '../../../../api/menu.api';
 import { categoryApi } from '../../../../api/category.api';
 import { orderApi } from '../../../../api/order.api';
 import { useSocketEvent } from '../../../../hooks/useSocket';
 import { PLACEHOLDER_IMAGE } from '../../../../lib/imagePlaceholder';
+import { canHandleBilling } from '../../../../utils/permissions';
 
 const ICON_MAP = {
   utensils: '🍽️', pizza: '🍕', hamburger: '🍔', coffee: '☕',
@@ -21,6 +22,10 @@ export default function PosWorkspace() {
   const { settings } = useSettingsStore();
   const currency = settings?.currencySymbol || '₹';
   const { activeOrderTakingId, setScreen, setCheckoutOrderId, addToast, goBack, refreshTrigger } = useUiStore();
+  const { user } = useAuthStore();
+  // The Payment action opens the billing overlay — restricted to billing-capable
+  // roles (ADMIN/MANAGER/CASHIER). WAITER may take orders but never collect payment.
+  const canBill = canHandleBilling(user?.role);
 
   // ── Data state ──
   const [menuItems, setMenuItems] = useState([]);
@@ -194,6 +199,10 @@ export default function PosWorkspace() {
 
   const handlePayment = async () => {
     if (submitting) return;
+    if (!canBill) {
+      addToast('Payment is restricted to billing staff.', 'warning');
+      return;
+    }
     if (cartItems.length === 0 && !activeOrderTakingId) {
       addToast('Add items to cart first', 'warning');
       return;
@@ -486,18 +495,20 @@ export default function PosWorkspace() {
               </button>
             )}
           </div>
-          <button
-            onClick={handlePayment}
-            disabled={(cartItems.length === 0 && !activeOrderTakingId) || submitting !== null}
-            className={`w-full h-10 font-bold rounded-xl text-[10px] uppercase tracking-wider shadow-sm transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
-              counterSaleMode
-                ? 'bg-[#16A34A] hover:bg-[#15803D] text-white'
-                : 'bg-[#1a73e8] hover:bg-[#1557b0] text-white'
-            }`}
-          >
-            <CreditCard className="w-3.5 h-3.5" />
-            {submitting === 'pay' ? 'Processing...' : (counterSaleMode ? 'PAYMENT' : 'Payment')}
-          </button>
+          {canBill && (
+            <button
+              onClick={handlePayment}
+              disabled={(cartItems.length === 0 && !activeOrderTakingId) || submitting !== null}
+              className={`w-full h-10 font-bold rounded-xl text-[10px] uppercase tracking-wider shadow-sm transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
+                counterSaleMode
+                  ? 'bg-[#16A34A] hover:bg-[#15803D] text-white'
+                  : 'bg-[#1a73e8] hover:bg-[#1557b0] text-white'
+              }`}
+            >
+              <CreditCard className="w-3.5 h-3.5" />
+              {submitting === 'pay' ? 'Processing...' : (counterSaleMode ? 'PAYMENT' : 'Payment')}
+            </button>
+          )}
         </div>
       </div>
 

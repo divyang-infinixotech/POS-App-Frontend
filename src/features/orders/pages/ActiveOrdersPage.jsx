@@ -12,6 +12,7 @@ import { tableApi } from '../../../api/table.api';
 import { useSocketEvent } from '../../../hooks/useSocket';
 import { openBillPrintPreview, openKotPrintPreview } from '../../../services/printService';
 import API_BASE_URL from '../../../config/apiConfig';
+import { canHandleBilling } from '../../../utils/permissions';
 
 // ── Color status mapping ──
 const STATUS_STYLES = {
@@ -102,6 +103,9 @@ export default function ActiveOrdersPage() {
   const currency = settings?.currencySymbol || '₹';
   const { user } = useAuthStore();
   const isServiceStaff = (user?.role || '').toUpperCase() === 'WAITER';
+  // Bill checkout / payment actions are restricted to billing-capable roles
+  // (ADMIN/MANAGER/CASHIER). WAITER and KITCHEN must never see them.
+  const canBill = canHandleBilling(user?.role);
   const [searchQuery, setSearchQuery] = useState('');
   const [typeFilter, setTypeFilter] = useState('All');
   const [loading, setLoading] = useState(true);
@@ -751,7 +755,7 @@ export default function ActiveOrdersPage() {
               {kotLoading === order.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Printer className="w-3 h-3" />} KOT
             </button>
           )}
-          {settings.enableBilling !== false && !isServiceStaff && (
+          {settings.enableBilling !== false && canBill && (
             <button onClick={() => handlePrintBill(order)}
               className="h-10 bg-white border border-slate-200 hover:bg-slate-50 text-[#111827] font-bold rounded-lg text-[9px] uppercase tracking-wider flex items-center justify-center gap-1 transition-colors cursor-pointer">
               <CreditCard className="w-3 h-3" /> Bill
@@ -840,7 +844,7 @@ export default function ActiveOrdersPage() {
                 {kotLoading === order.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Printer className="w-3 h-3" />} KOT
               </button>
             )}
-            {settings.enableBilling !== false && !isServiceStaff && (
+            {settings.enableBilling !== false && canBill && (
               <button onClick={() => handleCheckoutHeld(order.id)}
                 className="h-10 text-[9px] font-bold bg-emerald-100 hover:bg-emerald-200 text-emerald-800 rounded-lg flex items-center justify-center gap-1 transition-all cursor-pointer">
                 <DollarSign className="w-3 h-3" /> Checkout
@@ -879,7 +883,7 @@ export default function ActiveOrdersPage() {
         <div className="flex justify-between items-center border-t border-dashed border-slate-200 pt-2">
           <span className="text-[9px] font-bold text-slate-400">{itemsCount} items</span>              <span className="font-mono font-black text-slate-700">{currency}{Number(total).toLocaleString('en-IN')}</span>
         </div>
-        {settings.enableBilling !== false && !isServiceStaff && (
+        {settings.enableBilling !== false && canBill && (
           <button onClick={() => handleReprintBill(order)}
             className="mt-2 w-full h-10 bg-white border border-slate-200 hover:bg-slate-50 text-slate-600 font-bold rounded-lg text-[9px] uppercase tracking-wider flex items-center justify-center gap-1 transition-colors cursor-pointer">
             <Printer className="w-3 h-3" /> Reprint Bill

@@ -7,6 +7,7 @@ import { floorApi } from '../../../../api/floor.api';
 import orderApi from '../../../../api/order.api';
 import { useSocketEvent } from '../../../../hooks/useSocket';
 import TableMergeModal from '../components/TableMergeModal';
+import { canHandleBilling } from '../../../../utils/permissions';
 
 // Module-level cache to prevent refetch on remount
 let cachedTables = null;
@@ -17,6 +18,8 @@ export default function TablesPage() {
   const { user } = useAuthStore();
   const isAdmin = ['SUPER_ADMIN', 'ADMIN', 'MANAGER'].includes(user?.role?.toUpperCase());
   const isServiceStaff = (user?.role || '').toUpperCase() === 'WAITER';
+  // Checkout opens the payment overlay — restricted to billing-capable roles
+  const canBill = canHandleBilling(user?.role);
   const { setScreen, setActiveOrderTakingId, setCheckoutOrderId, setShowTakeOrderWizard, addToast, refreshTrigger, incrementRefreshTrigger } = useUiStore();
   const { settings } = useSettingsStore();
   const currency = settings?.currencySymbol || '₹';
@@ -883,7 +886,7 @@ export default function TablesPage() {
                 }
               }}
                 className={`${isServiceStaff ? 'w-full' : 'flex-1'} h-9 bg-[#C85A32] text-white rounded-lg text-xs font-bold cursor-pointer`}>Add Items</button>
-              {!isServiceStaff && (
+              {canBill && (
               <button onClick={() => { 
                 const occTbl = selectedOccupiedTable;
                 setShowOccupiedModal(false);

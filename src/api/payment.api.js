@@ -22,9 +22,6 @@ export const paymentApi = {
   /** Mark bill as printed */
   markPrinted: (billId) => apiClient.post(`/payments/${billId}/print`),
 
-  /** Email receipt */
-  emailReceipt: (billId) => apiClient.post(`/payments/${billId}/email`),
-
   /** Generate UPI QR code data */
   generateUPIQr: (data) => apiClient.post('/payments/upi-qr', data),
 

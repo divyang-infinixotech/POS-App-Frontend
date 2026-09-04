@@ -1,11 +1,16 @@
 import React, { useState, useCallback } from 'react';
-import { useUiStore } from '../../../store';
+import { useUiStore, useAuthStore } from '../../../store';
 import { Search, Clock, Users, Check, Ban, RefreshCw, Loader2 } from 'lucide-react';
 import kotApi from '../../../api/kot.api';
 import { useSocketEvent } from '../../../hooks/useSocket';
+import { canHandleBilling } from '../../../utils/permissions';
 
 export default function KitchenPage() {
   const { setScreen, setCheckoutOrderId } = useUiStore();
+  const { user } = useAuthStore();
+  // Checkout Desk is a billing/payment workflow action — only billing-capable
+  // roles (ADMIN/MANAGER/CASHIER) may open it. KITCHEN and WAITER never see it.
+  const canBill = canHandleBilling(user?.role);
 
   const [kots, setKots] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -343,12 +348,14 @@ export default function KitchenPage() {
                     {busyAction === 'void' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Ban className="w-3.5 h-3.5" />}
                     {busyAction === 'void' ? 'Voiding...' : 'Void Ticket'}
                   </button>
-                  <button
-                    onClick={() => { setCheckoutOrderId(selectedKot.orderId); }}
-                    className="h-10 px-3 text-[10px] font-bold bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 rounded-lg uppercase tracking-wider flex items-center gap-1 transition-all cursor-pointer"
-                  >
-                    Checkout Desk
-                  </button>
+                  {canBill && (
+                    <button
+                      onClick={() => { setCheckoutOrderId(selectedKot.orderId); }}
+                      className="h-10 px-3 text-[10px] font-bold bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 rounded-lg uppercase tracking-wider flex items-center gap-1 transition-all cursor-pointer"
+                    >
+                      Checkout Desk
+                    </button>
+                  )}
                 </div>
                 <div>
                   {getNextStatus(selectedKot.status) && (

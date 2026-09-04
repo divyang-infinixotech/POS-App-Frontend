@@ -33,8 +33,8 @@ export const SCREEN_PERMISSIONS = {
   // Table Management
   tables: [ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.MANAGER, ROLES.CASHIER, ROLES.WAITER],
   
-  // Active Orders
-  active_orders: [ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.MANAGER, ROLES.CASHIER, ROLES.KITCHEN, ROLES.WAITER],
+  // Active Orders (KITCHEN is explicitly excluded — kitchen staff only see Kitchen Tickets)
+  active_orders: [ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.MANAGER, ROLES.CASHIER, ROLES.WAITER],
   
   // Menu Management
   menu: [ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.MANAGER],
@@ -114,15 +114,15 @@ export const ACTION_PERMISSIONS = {
   'table.assign': [ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.MANAGER, ROLES.WAITER],
   'table.transfer': [ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.MANAGER, ROLES.WAITER],
   
-  // Billing Actions
-  'bill.create': [ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.CASHIER],
-  'bill.print': [ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.CASHIER, ROLES.WAITER],
+  // Billing Actions — restricted to billing-capable roles (ADMIN/MANAGER/CASHIER)
+  'bill.create': [ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.MANAGER, ROLES.CASHIER],
+  'bill.print': [ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.MANAGER, ROLES.CASHIER],
   'bill.refund': [ROLES.SUPER_ADMIN, ROLES.ADMIN],
-  'bill.split': [ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.CASHIER],
-  'bill.close': [ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.CASHIER],
+  'bill.split': [ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.MANAGER, ROLES.CASHIER],
+  'bill.close': [ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.MANAGER, ROLES.CASHIER],
   
-  // Payment Actions
-  'payment.accept': [ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.CASHIER],
+  // Payment Actions — restricted to billing-capable roles (ADMIN/MANAGER/CASHIER)
+  'payment.accept': [ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.MANAGER, ROLES.CASHIER],
   'payment.refund': [ROLES.SUPER_ADMIN, ROLES.ADMIN],
   
   // Settings Actions
@@ -254,6 +254,24 @@ export const isScreenAllowedForBusinessMode = (screen, businessMode) => {
   if (!allowedModes) return true;
   const mode = String(businessMode || '').toLowerCase();
   return allowedModes.includes(mode);
+};
+
+// ─── Billing capability ─────────────────────────────────────────────────────
+// Roles allowed to handle payment collection, bill checkout, and checkout-desk
+// operations. KITCHEN and WAITER are explicitly excluded — the backend enforces
+// the same set (src/utils/billing-roles.js) so hiding the UI is never the only
+// line of defense.
+export const BILLING_ROLES = [
+  ROLES.SUPER_ADMIN,
+  ROLES.ADMIN,
+  ROLES.MANAGER,
+  ROLES.CASHIER,
+];
+
+/** Check whether a role can handle payment / bill checkout operations. */
+export const canHandleBilling = (role) => {
+  if (!role) return false;
+  return BILLING_ROLES.includes(role.toUpperCase());
 };
 
 // ─── Helper: Check if a role can access a screen ───────────────────────────

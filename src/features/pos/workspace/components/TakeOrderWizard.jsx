@@ -19,6 +19,7 @@ import { customerApi } from '../../../../api/customer.api';
 import { floorApi } from '../../../../api/floor.api';
 import { openKotPrintPreview } from '../../../../services/printService';
 import { PLACEHOLDER_IMAGE } from '../../../../lib/imagePlaceholder';
+import { canHandleBilling } from '../../../../utils/permissions';
 
 const STEP_LABELS = ['Order Type', 'Floor', 'Table', 'Menu', 'Review'];
 
@@ -80,6 +81,8 @@ export default function TakeOrderWizard({ mode = 'modal' } = {}) {
   const currency = settings?.currencySymbol || '₹';
   const { user } = useAuthStore();
   const isServiceStaff = (user?.role || '').toUpperCase() === 'WAITER';
+  // Save & Pay opens the payment overlay — restricted to billing-capable roles
+  const canBill = canHandleBilling(user?.role);
 
   // ── Step State ──
   const [currentStep, setCurrentStep] = useState(0);
@@ -647,10 +650,17 @@ export default function TakeOrderWizard({ mode = 'modal' } = {}) {
           paymentStatus: 'Pending',
         });
 
-        setCheckoutOrderId(orderData.id);
         incrementRefreshTrigger();
         setActionSuccess('bill');
-        addToast(`Order ${orderData.orderNo || orderData.id} created. Proceed to payment.`, 'success');
+        if (canBill) {
+          // Billing-capable roles continue straight into the payment overlay
+          setCheckoutOrderId(orderData.id);
+          addToast(`Order ${orderData.orderNo || orderData.id} created. Proceed to payment.`, 'success');
+        } else {
+          // WAITER (or any non-billing role) never sees the payment overlay —
+          // the order is saved and the wizard closes without opening checkout.
+          addToast(`Order ${orderData.orderNo || orderData.id} created successfully.`, 'success');
+        }
         setShowTakeOrderWizard(false);
       }
     } catch (e) {
@@ -1312,8 +1322,8 @@ export default function TakeOrderWizard({ mode = 'modal' } = {}) {
             {/* Save & Pay */}
             </>
             )}
-            {/* Save & Pay - hidden if billing module disabled or for Service Staff */}
-            {settings.enableBilling !== false && !isServiceStaff && (
+            {/* Save & Pay - hidden if billing module disabled or for non-billing roles (WAITER/KITCHEN) */}
+            {settings.enableBilling !== false && canBill && (
             <button onClick={handleSaveAndPay} disabled={submitting !== null}
               className="p-3 border-2 border-emerald-200 rounded-2xl hover:border-[#16A34A] hover:bg-emerald-50 transition-all text-center cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed">
               <DollarSign className="w-5 h-5 text-emerald-600 mx-auto mb-1" />
