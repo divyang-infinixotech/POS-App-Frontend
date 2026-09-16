@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { useAuthStore, useUiStore, useSettingsStore } from '../../../store';
 import { settingApi } from '../../../api/setting.api';
 import LoginForm from '../components/LoginForm';
-import { getDefaultScreenForRole } from '../../../utils/permissions';
+import { resolveHomeScreen, isSelfServeOnboarding } from '../../onboarding/onboarding.lib';
+import PolicyTextModal from '../../../components/legal/PolicyTextModal';
 
 function RestaurantLogo({ logo, restaurantName }) {
   const [imgError, setImgError] = useState(false);
@@ -35,12 +36,16 @@ function RestaurantLogo({ logo, restaurantName }) {
 }
 
 export default function LoginPage() {
-  const { error, clearError, user } = useAuthStore();
+  const { error, clearError, user, onboarding } = useAuthStore();
   const { login, isUnlocked } = useAuthStore();
   const { setScreen, setUnlocked } = useUiStore();
 
   const [localError, setLocalError] = useState('');
   const [loading, setLoading] = useState(false);
+
+  // Footer policy links (Terms & Conditions / Privacy Policy) — same shared
+  // policy texts used by registration and restaurant creation.
+  const [openPolicy, setOpenPolicy] = useState(null);
 
   // ── Restaurant branding state ──
   const [branding, setBranding] = useState({ name: null, logo: null });
@@ -67,13 +72,14 @@ export default function LoginPage() {
     return () => { cancelled = true; };
   }, []);
 
-  // Auto-redirect if already unlocked — use role-specific default screen
+  // Auto-redirect if already unlocked — self-serve applicants whose restaurant
+  // is not ACTIVE go into the onboarding wizard (resume); everyone else lands
+  // on their role-specific default screen.
   useEffect(() => {
     if (isUnlocked && user) {
-      const defaultScreen = getDefaultScreenForRole(user.role);
-      setScreen(defaultScreen);
+      setScreen(resolveHomeScreen(user, onboarding));
     }
-  }, [isUnlocked, user, setScreen]);
+  }, [isUnlocked, user, onboarding, setScreen]);
 
   // Sync store error
   useEffect(() => {
@@ -98,7 +104,11 @@ export default function LoginPage() {
         // Load the restaurant's persisted settings from the database right after
         // login so all module/visibility toggles apply immediately (requirement:
         // settings load automatically on login, no frontend-only state).
-        useSettingsStore.getState().fetchSettings();
+        // Self-serve applicants (restaurant not ACTIVE) cannot read POS settings
+        // yet — they are routed into the onboarding wizard instead.
+        if (!isSelfServeOnboarding(useAuthStore.getState().onboarding)) {
+          useSettingsStore.getState().fetchSettings();
+        }
         // Role-based redirect — happens in the isUnlocked useEffect above
         // after user is populated by login().
       } else {
@@ -164,6 +174,18 @@ export default function LoginPage() {
         </div>
 
         <LoginForm onSubmit={handleLogin} loading={loading} error={localError} />
+
+        {/* ── Create New Account (self-serve onboarding) ── */}
+        <div className="pt-4 border-t border-slate-100 text-center space-y-2">
+          <p className="text-[10px] text-slate-400 font-semibold">Don't have an account?</p>
+          <button
+            type="button"
+            onClick={() => { clearError(); setScreen('register'); }}
+            className="w-full h-10 rounded-xl border-2 border-[#16A34A] text-[#16A34A] hover:bg-[#16A34A] hover:text-white font-extrabold text-xs uppercase tracking-wider transition-all cursor-pointer"
+          >
+            Create New Account
+          </button>
+        </div>
       </div>
 
       {/* Footer */}
@@ -172,15 +194,27 @@ export default function LoginPage() {
           &copy; 2026 Nirka POS. All rights reserved.
         </p>
         <div className="flex items-center justify-center gap-1.5 text-[10px] text-slate-400">
-          <button type="button" className="hover:text-[#16A34A] transition-colors cursor-pointer font-medium">
+          <button
+            type="button"
+            onClick={() => setOpenPolicy('PRIVACY_POLICY')}
+            className="hover:text-[#16A34A] transition-colors cursor-pointer font-medium"
+          >
             Privacy Policy
           </button>
           <span className="text-slate-300">|</span>
-          <button type="button" className="hover:text-[#16A34A] transition-colors cursor-pointer font-medium">
+          <button
+            type="button"
+            onClick={() => setOpenPolicy('TERMS_OF_SERVICE')}
+            className="hover:text-[#16A34A] transition-colors cursor-pointer font-medium"
+          >
             Terms of Service
           </button>
         </div>
       </div>
+
+      {openPolicy && (
+        <PolicyTextModal type={openPolicy} onClose={() => setOpenPolicy(null)} />
+      )}
     </div>
   );
 }

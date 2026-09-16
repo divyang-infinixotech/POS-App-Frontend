@@ -5,7 +5,7 @@ import { settingApi } from '../api/setting.api';
 const MODULE_VISIBILITY_KEYS = [
   'enablePosOrdering', 'enableKitchen', 'enableBilling', 'enableFloorManagement',
   'enableReports', 'enableMenu', 'enableActiveOrders', 'enableTableReservations',
-  'enableCounterSale',
+  'enableCounterSale', 'enableStaffRoster', 'barcodeScannerEnabled',
 ];
 
 // ── Business Mode presets ──────────────────────────────────────────────────
@@ -50,6 +50,21 @@ const BUSINESS_MODE_PRESETS = {
       enableBilling: true,
     },
   },
+};
+
+// ── Business-mode normalization ─────────────────────────────────────────────
+// The backend stores the Plan enum (`RESTAURANT` | `BASIC_POS`) while the UI
+// uses lowercase modes (`restaurant` | `counter`; `hybrid` only via
+// applyBusinessMode). Normalize ONCE here so every mode comparison in the app
+// accepts both forms — a BASIC_POS tenant must resolve to the `counter`
+// preset (Counter Sale), not fall back to the restaurant preset.
+export const normalizeBusinessMode = (mode) => {
+  const raw = String(mode || '').trim();
+  const upper = raw.toUpperCase();
+  if (upper === 'BASIC_POS') return 'counter';
+  if (upper === 'RESTAURANT') return 'restaurant';
+  const lower = raw.toLowerCase();
+  return ['restaurant', 'counter', 'hybrid'].includes(lower) ? lower : 'restaurant';
 };
 
 // ── UI-only keys persisted to localStorage ──────────────────────────────────
@@ -148,6 +163,7 @@ const defaultSettings = {
   
   // Module Visibility (centralized controls)
   enablePosOrdering: true,      // POS Ordering screen (when ON, New Ticket is hidden — orders start here)
+  dietaryMode: 'VEG_AND_NON_VEG', // restaurant-level max dietary mode (VEG_ONLY | VEG_AND_NON_VEG)
   posLayout: 'basic',           // POS Layout: 'basic' (Basic POS) | 'standard' | 'quick'
   enableKitchen: true,          // KOT generation + Kitchen module
   enableBilling: true,          // Billing workflow
@@ -162,6 +178,8 @@ const defaultSettings = {
   enableStock: true,            // Stock management
   enableActiveOrders: true,     // Active Orders screen
   enableTableReservations: false,
+  enableStaffRoster: true,      // Staff Roster screen (plan entitlement still applies first)
+  barcodeScannerEnabled: false, // Part 11: tenant scanner toggle (plan entitlement still applies first)
   // Business Mode (configures multiple module visibility toggles at once)
   businessMode: 'restaurant',   // 'restaurant' | 'counter' (Basic POS) | 'hybrid'
   // Counter Sale Mode
@@ -226,7 +244,7 @@ function getInitialSettings() {
   
   // Apply business mode presets on load — this ensures visibility toggles
   // match the saved business mode, overriding any stale localStorage values
-  const mode = merged.businessMode || 'restaurant';
+  const mode = normalizeBusinessMode(merged.businessMode);
   const preset = BUSINESS_MODE_PRESETS[mode];
   if (preset) {
     Object.assign(merged, preset.settings);
@@ -242,6 +260,11 @@ const useSettingsStore = create((set, get) => ({
   error: null,
   lastFetched: null,
   moduleVisibilityVersion: 0,  // Incremented when any MODULE_VISIBILITY_KEYS value changes
+  // Part 11: true ONLY when the restaurant's plan includes barcode_scanner.
+  // Set by authStore (which owns the subscription snapshot) after login/profile
+  // load. The tenant toggle (settings.barcodeScannerEnabled) is separate —
+  // scanners are active only when BOTH are true.
+  barcodeScannerAvailable: false,
 
   fetchSettings: async () => {
     set({ loading: true, error: null });
@@ -310,6 +333,7 @@ const useSettingsStore = create((set, get) => ({
             enableStock: s.enableStock ?? base.enableStock,
             enableActiveOrders: s.enableActiveOrders ?? base.enableActiveOrders,
             enableTableReservations: s.enableTableReservations ?? base.enableTableReservations,
+            enableStaffRoster: s.enableStaffRoster ?? base.enableStaffRoster,
             
             // Billing behavior
             autoPrintBill: s.autoPrintBill ?? base.autoPrintBill,
@@ -327,10 +351,15 @@ const useSettingsStore = create((set, get) => ({
             // POS Ordering / Layout (explicit columns)
             enablePosOrdering: s.enablePosOrdering !== null && s.enablePosOrdering !== undefined
               ? s.enablePosOrdering : base.enablePosOrdering,
+            // Restaurant dietary mode (Part 6)
+            dietaryMode: s.dietaryMode === 'VEG_ONLY' || s.dietaryMode === 'VEG_AND_NON_VEG'
+              ? s.dietaryMode : base.dietaryMode,
             posLayout: s.posLayout || base.posLayout || 'basic',
-            businessMode: s.businessMode || base.businessMode || 'restaurant',
+            businessMode: normalizeBusinessMode(s.businessMode || base.businessMode),
             enableCounterSale: s.enableCounterSale !== null && s.enableCounterSale !== undefined
               ? s.enableCounterSale : base.enableCounterSale,
+            // Part 11: tenant Barcode Scanner toggle (DB column, default false)
+            barcodeScannerEnabled: s.barcodeScannerEnabled === true,
             taxType: s.taxType || base.taxType || 'Inclusive',
             taxesAndCharges: Array.isArray(s.taxesAndCharges) ? s.taxesAndCharges : base.taxesAndCharges,
             
@@ -348,7 +377,7 @@ const useSettingsStore = create((set, get) => ({
           // Apply business-mode module presets to ensure module visibility
           // is consistent with the effective business mode. This corrects
           // legacy rows saved before the mode rule existed.
-          const effectiveMode = newSettings.businessMode || 'restaurant';
+          const effectiveMode = normalizeBusinessMode(newSettings.businessMode);
           const preset = BUSINESS_MODE_PRESETS[effectiveMode];
           if (preset) {
             Object.keys(preset.settings).forEach((key) => {
@@ -401,10 +430,10 @@ const useSettingsStore = create((set, get) => ({
         'receiptFooter', 'enableKitchen', 'enableBilling', 'enableHoldOrders',
         'enableAddItem', 'enableSplitBill', 'enableTransferTable', 'enableMergeTables',
         'enableFloorManagement', 'enableReports', 'enableMenu', 'enableStock',
-        'enableActiveOrders', 'enableTableReservations', 'autoPrintBill', 'autoPrintKOT',
+        'enableActiveOrders',        'enableTableReservations', 'enableStaffRoster', 'autoPrintBill', 'autoPrintKOT',
         'autoGenerateKOT', 'multiplePayments', 'askCustomerBeforePrint', 'autoReleaseTable',
         'printers', 'enablePosOrdering', 'posLayout', 'enableCounterSale',
-        'taxType', 'taxesAndCharges',
+        'taxType', 'taxesAndCharges', 'barcodeScannerEnabled',
       ];
       const uiSettings = {};
       Object.keys(s).forEach((key) => {
@@ -455,6 +484,9 @@ const useSettingsStore = create((set, get) => ({
         enableStock: Boolean(s.enableStock !== false),
         enableActiveOrders: Boolean(s.enableActiveOrders !== false),
         enableTableReservations: Boolean(s.enableTableReservations === true),
+        enableStaffRoster: Boolean(s.enableStaffRoster !== false),
+        // Part 11: Barcode Scanner tenant toggle
+        barcodeScannerEnabled: Boolean(s.barcodeScannerEnabled === true),
         // Billing Behavior
         autoPrintBill: Boolean(s.autoPrintBill === true),
         autoPrintKOT: Boolean(s.autoPrintKOT === true),
@@ -463,7 +495,8 @@ const useSettingsStore = create((set, get) => ({
         askCustomerBeforePrint: Boolean(s.askCustomerBeforePrint === true),
         autoReleaseTable: Boolean(s.autoReleaseTable !== false),
         // POS Ordering / Layout (persisted per restaurant)
-        enablePosOrdering: Boolean(s.enablePosOrdering !== false),
+        enablePosOrdering: true, // Part 10: always ON — never sent as false
+        dietaryMode: s.dietaryMode === 'VEG_ONLY' ? 'VEG_ONLY' : 'VEG_AND_NON_VEG',
         posLayout: s.posLayout || 'basic',
         // businessMode is derived from the subscription plan — not sent by admin
         enableCounterSale: Boolean(s.enableCounterSale === true),
@@ -520,7 +553,7 @@ const useSettingsStore = create((set, get) => ({
   // Called internally when subscription businessMode changes. Admins cannot
   // invoke this directly — the mode is derived from the subscription plan.
   applyBusinessMode: async (mode) => {
-    const preset = BUSINESS_MODE_PRESETS[mode];
+    const preset = BUSINESS_MODE_PRESETS[normalizeBusinessMode(mode)];
     if (!preset) return;
     // Apply all preset settings at once
     const { updateSettings } = get();
@@ -658,3 +691,4 @@ const useSettingsStore = create((set, get) => ({
 }));
 
 export default useSettingsStore;
+export { useSettingsStore };

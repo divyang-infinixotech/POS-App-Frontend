@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { authApi } from '../api/auth.api';
 import { subscriptionApi } from '../api/subscription.api';
+import { userApi } from '../api/user.api';
 import {
   canAccessScreen,
   canPerformAction,
@@ -8,7 +9,27 @@ import {
   getRoleDisplayName,
   getDefaultScreenForRole,
   hasFeature,
+  resolveStaffPermissions,
+  hasStaffPermission,
+  screenPermissionKey,
 } from '../utils/permissions';
+import { useSettingsStore } from './settingsStore';
+import { isSelfServeOnboarding } from '../features/onboarding/onboarding.lib';
+
+/**
+ * Keep ONLY genuine self-serve applicant payloads in auth state.
+ *
+ * The backend may attach an `onboarding` object to login/register/profile
+ * responses; for a normal (non-self-serve) POS account that payload is at
+ * best irrelevant and at worst harmful — the app shell treats a non-null
+ * applicant payload as "route this user into the onboarding wizard", which is
+ * exactly the bug that sent approved POS users into a 403 loop against
+ * /onboarding/status. Normalizing here makes the auth store authoritative:
+ * an approved/normal user NEVER carries an applicant payload.
+ */
+function sanitizeOnboardingPayload(onboarding) {
+  return isSelfServeOnboarding(onboarding) ? onboarding : null;
+}
 
 // ─── Persistence keys ───────────────────────────────────────────────────────
 const STORAGE_KEY_TOKEN = 'pos_token';
@@ -54,10 +75,29 @@ function loadLockoutUntil() {
 // ─── Idempotency guard for StrictMode ───────────────────────────────────────
 let restoreSessionPromise = null;
 
+/**
+ * Sync plan-derived feature entitlements into the settings store.
+ * Part 11: `barcodeScannerAvailable` = the subscription snapshot includes the
+ * barcode_scanner plan feature. The tenant toggle
+ * (settings.barcodeScannerEnabled) is separate and lives in settingsStore.
+ */
+function syncFeatureEntitlements(subscription) {
+  try {
+    useSettingsStore.setState({
+      barcodeScannerAvailable: hasFeature(subscription, 'barcode_scanner'),
+    });
+  } catch { /* settings store not ready — defaults to false (safe) */ }
+}
+
 const useAuthStore = create((set, get) => ({
   // State
   user: loadStoredUser(),
+  mustChangePassword: false, // set from login/profile responses (backend-authoritative)
   subscription: null, // live subscription snapshot (plan, limits, features) — never cached, refreshed at login/profile
+  // Self-serve onboarding payload returned by /auth/login|register|profile for
+  // ADMIN applicants whose restaurant is not ACTIVE yet. Backend status is the
+  // source of truth for every step decision in the onboarding wizard.
+  onboarding: null,
   token: localStorage.getItem(STORAGE_KEY_TOKEN) || null,
   isAuthenticated: !!localStorage.getItem(STORAGE_KEY_TOKEN),
   isUnlocked: !!localStorage.getItem(STORAGE_KEY_TOKEN),
@@ -71,12 +111,77 @@ const useAuthStore = create((set, get) => ({
   previousScreen: localStorage.getItem(STORAGE_KEY_PREVIOUS_SCREEN) || 'dashboard',
 
   // ── Role-based permission helpers (computed from user.role) ──
-  
-  /** Check if current user can access a screen */
-  canAccessScreen: (screen) => {
-    const { user } = get();
+
+  /**
+   * Per-staff permission state (Part 23). Loaded from /users/me/permissions
+   * after login for tenant staff. ADMIN/SUPER_ADMIN resolve to full access
+   * without a fetch (Part 21) — they are never restricted.
+   */
+  staffPermissions: null, // { full, keys } | null (not loaded yet)
+  staffDietaryAccess: null, // 'VEG_ONLY' | 'VEG_AND_NON_VEG' | null
+  // Assigned order types from the Staff Roster ('TAKEAWAY'/'DINE_IN' list).
+  // null = unrestricted (no assignment rows) → all order types allowed.
+  staffAssignedOrderTypes: null,
+  staffPermissionsLoading: false,
+
+  /** Load the current user's effective permissions (idempotent per session). */
+  loadStaffPermissions: async () => {
+    const { user, staffPermissions, staffPermissionsLoading } = get();
+    if (!user) return null;
+    const role = String(user.role || '').toUpperCase();
+    if (role === 'ADMIN' || role === 'SUPER_ADMIN') {
+      set({ staffPermissions: { full: true, keys: new Set() }, staffDietaryAccess: 'VEG_AND_NON_VEG', staffAssignedOrderTypes: null });
+      return get().staffPermissions;
+    }
+    if (staffPermissions || staffPermissionsLoading) return staffPermissions;
+    set({ staffPermissionsLoading: true });
+    try {
+      const resp = await userApi.getMyPermissions();
+      const data = resp?.data || resp;
+      const effective = resolveStaffPermissions(
+        role,
+        data.effectivePermissions
+          ? data.effectivePermissions.map((k) => ({ permissionKey: k, enabled: true }))
+          : data.overrides || [],
+        {},
+        null
+      );
+      set({
+        staffPermissions: effective,
+        staffDietaryAccess: data.dietaryAccess || 'VEG_AND_NON_VEG',
+        staffAssignedOrderTypes: Array.isArray(data.assignedOrderTypes) ? data.assignedOrderTypes : null,
+        staffPermissionsLoading: false,
+      });
+      return effective;
+    } catch {
+      // Fail CLOSED would lock existing staff out on a transient error — fail
+      // OPEN to the role defaults instead (backend still enforces per route).
+      set({ staffPermissions: resolveStaffPermissions(role), staffDietaryAccess: 'VEG_AND_NON_VEG', staffAssignedOrderTypes: null, staffPermissionsLoading: false });
+      return get().staffPermissions;
+    }
+  },
+
+  /** Has the current user an effective staff permission (screen or action)? */
+  hasPermission: (key) => {
+    const { user, staffPermissions } = get();
     if (!user) return false;
-    return canAccessScreen(user.role, screen);
+    const role = String(user.role || '').toUpperCase();
+    if (role === 'ADMIN' || role === 'SUPER_ADMIN') return true;
+    if (!staffPermissions) return canAccessScreen(role, screenPermissionKey(key) || '') || canPerformAction(role, key);
+    return hasStaffPermission(staffPermissions, key);
+  },
+
+  /** Can the current user open a screen (role + staff permission)? */
+  canAccessScreen: (screen) => {
+    const { user, staffPermissions } = get();
+    if (!user) return false;
+    if (!canAccessScreen(user.role, screen)) return false;
+    const key = screenPermissionKey(screen);
+    if (!key) return true; // screen not staff-configurable → role check only
+    const role = String(user.role || '').toUpperCase();
+    if (role === 'ADMIN' || role === 'SUPER_ADMIN') return true;
+    if (!staffPermissions) return true; // not loaded yet → role default
+    return hasStaffPermission(staffPermissions, key);
   },
 
   /** Check if current user can perform an action */
@@ -158,6 +263,9 @@ const useAuthStore = create((set, get) => ({
 
   // ── Auth Actions ──
 
+  /** Store the onboarding payload handed back by the backend (or clear it). */
+  setOnboarding: (onboarding) => set({ onboarding: onboarding || null }),
+
   login: async (email, password) => {
     set({ loading: true, error: null });
     try {
@@ -170,7 +278,62 @@ const useAuthStore = create((set, get) => ({
         set({
           token: resp.token,
           user: resp.user,
+          // First-login forced password change flag comes from the login body
+          // (mustChangePassword, backend-authoritative) or the user row.
+          mustChangePassword: resp.mustChangePassword === true || resp.user?.mustChangePassword === true,
           subscription: resp.subscription || null,
+          onboarding: sanitizeOnboardingPayload(resp.onboarding),
+          isAuthenticated: true,
+          isUnlocked: true,
+          loading: false,
+          sessionReady: true,
+        });
+        syncFeatureEntitlements(resp.subscription || null);
+        // Load per-staff permissions for this session (fire and forget).
+        get().loadStaffPermissions().catch(() => {});
+        return true;
+      }
+      // success:false with an applicant code — the credentials are correct but
+      // the application is pending / rejected, so the applicant must NOT get a
+      // POS session. Surface the backend's message (APPLICATION_PENDING /
+      // APPLICATION_REJECTED) instead of a generic "Invalid credentials".
+      if (resp.code === 'APPLICATION_PENDING' || resp.code === 'APPLICATION_REJECTED') {
+        const pendingError = new Error(resp.message || 'Your application is pending approval.');
+        pendingError.code = resp.code;
+        pendingError.status = 403;
+        set({ error: pendingError.message, loading: false });
+        throw pendingError;
+      }
+      set({ error: 'Invalid credentials', loading: false });
+      return false;
+    } catch (e) {
+      // Preserve HTTP status so callers can distinguish auth errors from server errors
+      const authError = new Error(e.message || 'Login failed');
+      authError.status = e.status;
+      set({ error: authError.message, loading: false });
+      throw authError;
+    }
+  },
+
+  /**
+   * Public self-serve registration. The backend always creates a role=ADMIN
+   * account with no restaurant and returns an onboarding payload in REGISTERED
+   * state; the caller routes into the onboarding wizard afterwards.
+   */
+  register: async (data) => {
+    set({ loading: true, error: null });
+    try {
+      const resp = await authApi.register(data);
+      if (resp.success && resp.token) {
+        localStorage.setItem(STORAGE_KEY_TOKEN, resp.token);
+        if (resp.user) {
+          localStorage.setItem(STORAGE_KEY_USER, JSON.stringify(resp.user));
+        }
+        set({
+          token: resp.token,
+          user: resp.user,
+          subscription: resp.subscription || null,
+          onboarding: sanitizeOnboardingPayload(resp.onboarding),
           isAuthenticated: true,
           isUnlocked: true,
           loading: false,
@@ -178,11 +341,11 @@ const useAuthStore = create((set, get) => ({
         });
         return true;
       }
-      set({ error: 'Invalid credentials', loading: false });
+      set({ error: 'Registration failed', loading: false });
       return false;
     } catch (e) {
-      // Preserve HTTP status so callers can distinguish auth errors from server errors
-      const authError = new Error(e.message || 'Login failed');
+      // Preserve HTTP status (400 duplicate email/phone, network, server …)
+      const authError = new Error(e.message || 'Registration failed');
       authError.status = e.status;
       set({ error: authError.message, loading: false });
       throw authError;
@@ -201,12 +364,19 @@ const useAuthStore = create((set, get) => ({
       user: null,
       token: null,
       subscription: null,
+      onboarding: null,
+      mustChangePassword: false,
       isAuthenticated: false,
       isUnlocked: false,
+      // Clear per-staff permission state — the next login reloads it
+      staffPermissions: null,
+      staffDietaryAccess: null,
       sessionReady: true,
       failedUnlockAttempts: 0,
       lockoutUntil: 0,
     });
+    // Plan entitlements are revoked with the session (Part 11)
+    syncFeatureEntitlements(null);
   },
 
   /**
@@ -234,12 +404,20 @@ const useAuthStore = create((set, get) => ({
           localStorage.setItem(STORAGE_KEY_USER, JSON.stringify(resp.user));
           set({
             user: resp.user,
+            // Keep the flag fresh on rehydration — the user object carries
+            // mustChangePassword straight from /auth/profile.
+            mustChangePassword: resp.user?.mustChangePassword === true,
             subscription: resp.subscription || null,
+            onboarding: sanitizeOnboardingPayload(resp.onboarding),
             token,
             isAuthenticated: true,
             isUnlocked: true,
             sessionReady: true,
           });
+          syncFeatureEntitlements(resp.subscription || null);
+          // Load per-staff permissions for the restored session (fire and
+          // forget — resolveStaffPermissions fail-open keeps the role defaults).
+          get().loadStaffPermissions().catch(() => {});
         } else {
           // Token invalid — force logout
           localStorage.removeItem(STORAGE_KEY_TOKEN);
@@ -248,6 +426,7 @@ const useAuthStore = create((set, get) => ({
             user: null,
             token: null,
             subscription: null,
+            onboarding: null,
             isAuthenticated: false,
             isUnlocked: false,
             sessionReady: true,
@@ -262,6 +441,29 @@ const useAuthStore = create((set, get) => ({
     })();
 
     return restoreSessionPromise;
+  },
+
+  /**
+   * Re-fetch the profile + onboarding payload from the backend (used when the
+   * applicant becomes ACTIVE so the same session can enter the POS). Returns
+   * true when the profile refreshed successfully.
+   */
+  refreshProfile: async () => {
+    try {
+      const resp = await authApi.profile();
+      if (resp.success && resp.user) {
+        localStorage.setItem(STORAGE_KEY_USER, JSON.stringify(resp.user));
+        set({
+          user: resp.user,
+          subscription: resp.subscription || null,
+          onboarding: sanitizeOnboardingPayload(resp.onboarding),
+        });
+        return true;
+      }
+      return false;
+    } catch (e) {
+      return false;
+    }
   },
 
   /**
@@ -362,8 +564,8 @@ const useAuthStore = create((set, get) => ({
   updateProfile: (profile) => {
     const current = get().user || {};
     const updated = { ...current, ...profile };
-    localStorage.setItem(STORAGE_KEY_USER, JSON.stringify(updated));
-    set({ user: updated });
+        localStorage.setItem(STORAGE_KEY_USER, JSON.stringify(updated));
+        set({ user: updated });
   },
 
   clearError: () => set({ error: null }),
@@ -379,6 +581,7 @@ const useAuthStore = create((set, get) => ({
       const resp = await subscriptionApi.refresh();
       if (resp.success && resp.data) {
         set({ subscription: resp.data });
+        syncFeatureEntitlements(resp.data);
         return true;
       }
       return false;

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { superAdminApi } from '../../../api/superAdmin.api';
 import { X, Loader2, Eye, EyeOff } from 'lucide-react';
+import { emailError as emailFieldError, emailOptionalError, normalizeEmail } from '../../../utils/email';
 
 const CURRENCIES = ['INR', 'USD', 'EUR', 'GBP', 'AED'];
 const LANGUAGES = ['en', 'hi', 'gu', 'fr', 'ar'];
@@ -34,6 +35,8 @@ export default function RestaurantForm({ restaurant, onClose, onSaved }) {
     timezone: restaurant?.timezone || 'Asia/Kolkata',
     currency: restaurant?.currency || 'INR',
     language: restaurant?.language || 'en',
+    // Food/Dietary Configuration — current tenant value (restaurantDetails)
+    dietaryMode: restaurant?.dietaryMode || 'VEG_AND_NON_VEG',
     subscriptionPlan: restaurant?.plan || '',
     planId: restaurant?.planId || '',
     trialDays: 15,
@@ -59,10 +62,14 @@ export default function RestaurantForm({ restaurant, onClose, onSaved }) {
     if (!form.ownerName.trim()) { setError('Owner name is required'); return; }
     if (!form.mobile.trim()) { setError('Mobile number is required'); return; }
 
-    // For creation, validate admin fields
+    // For creation, validate admin fields. NO legal-acceptance gating —
+    // Super Admin → Add Restaurant is a PLATFORM ADMINISTRATIVE operation;
+    // mandatory Terms/Privacy acceptance belongs to the new-user
+    // self-serve registration flow only.
     if (!isEdit) {
       if (!form.adminName.trim()) { setError('Admin name is required'); return; }
-      if (!form.adminEmail.trim()) { setError('Admin email is required'); return; }
+      const adminEmailMsg = emailFieldError(form.adminEmail);
+      if (adminEmailMsg) { setError(adminEmailMsg); return; }
       if (!form.adminPassword.trim()) { setError('Admin password is required'); return; }
       if (form.adminPassword.length < 6) { setError('Admin password must be at least 6 characters'); return; }
     }
@@ -87,10 +94,18 @@ export default function RestaurantForm({ restaurant, onClose, onSaved }) {
           currency: form.currency,
           language: form.language,
           logo: form.logo || undefined,
+          // Dietary mode change updates tenant RestaurantSetting; existing
+          // menu items are never silently modified.
+          dietaryMode: form.dietaryMode || undefined,
         });
       } else {
         const selectedPlan = plans.find((p) => p.code === form.subscriptionPlan);
-        await superAdminApi.createRestaurant({ ...form, planId: selectedPlan?.id || undefined });
+        await superAdminApi.createRestaurant({
+          ...form,
+          email: form.email ? normalizeEmail(form.email) : '',
+          adminEmail: normalizeEmail(form.adminEmail),
+          planId: selectedPlan?.id || undefined,
+        });
       }
       onSaved();
     } catch (e) {
@@ -203,6 +218,28 @@ export default function RestaurantForm({ restaurant, onClose, onSaved }) {
                 </select>
               </div>
             </div>
+
+            {/* Food / Dietary Configuration (Part 1) — same control as the wizard */}
+            <div className="space-y-1">
+              <label className="text-[10px] font-bold text-slate-600">Food / Dietary Configuration</label>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleChange('dietaryMode', 'VEG_ONLY')}
+                  className={`px-3 py-1.5 rounded-lg text-[11px] font-bold transition-colors ${form.dietaryMode === 'VEG_ONLY' ? 'bg-[#16A34A] text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+                >
+                  Veg Only
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleChange('dietaryMode', 'VEG_AND_NON_VEG')}
+                  className={`px-3 py-1.5 rounded-lg text-[11px] font-bold transition-colors ${form.dietaryMode === 'VEG_AND_NON_VEG' ? 'bg-[#16A34A] text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+                >
+                  Veg + Non-Veg
+                </button>
+                <span className="text-[10px] text-slate-400">Maximum food type this restaurant can sell</span>
+              </div>
+            </div>
           </div>
 
           {/* Subscription */}
@@ -232,29 +269,31 @@ export default function RestaurantForm({ restaurant, onClose, onSaved }) {
 
           {/* Admin Creation (only for new) */}
           {!isEdit && (
-            <div className="space-y-3">
-              <h3 className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500">Auto-Create Restaurant Admin</h3>
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <label className="text-[10px] font-bold text-slate-600">Admin Name *</label>
-                  <input value={form.adminName} onChange={e => handleChange('adminName', e.target.value)} className="w-full h-9 px-3 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold outline-none focus:border-[#16A34A]" />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-[10px] font-bold text-slate-600">Admin Email *</label>
-                  <input type="email" value={form.adminEmail} onChange={e => handleChange('adminEmail', e.target.value)} className="w-full h-9 px-3 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold outline-none focus:border-[#16A34A]" />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-[10px] font-bold text-slate-600">Admin Password *</label>
-                  <div className="relative">
-                    <input type={showPassword ? 'text' : 'password'} value={form.adminPassword} onChange={e => handleChange('adminPassword', e.target.value)} className="w-full h-9 pl-3 pr-9 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold outline-none focus:border-[#16A34A]" />
-                    <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 cursor-pointer">
-                      {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                    </button>
+            <>
+              <div className="space-y-3">
+                <h3 className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500">Auto-Create Restaurant Admin</h3>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-slate-600">Admin Name *</label>
+                    <input value={form.adminName} onChange={e => handleChange('adminName', e.target.value)} className="w-full h-9 px-3 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold outline-none focus:border-[#16A34A]" />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-slate-600">Admin Email *</label>
+                    <input type="email" value={form.adminEmail} onChange={e => handleChange('adminEmail', e.target.value)} className="w-full h-9 px-3 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold outline-none focus:border-[#16A34A]" />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-slate-600">Admin Password *</label>
+                    <div className="relative">
+                      <input type={showPassword ? 'text' : 'password'} value={form.adminPassword} onChange={e => handleChange('adminPassword', e.target.value)} className="w-full h-9 pl-3 pr-9 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold outline-none focus:border-[#16A34A]" />
+                      <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 cursor-pointer">
+                        {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                      </button>
+                    </div>
                   </div>
                 </div>
+                <p className="text-[10px] text-slate-400">An admin user will be automatically created for this restaurant with the specified credentials.</p>
               </div>
-              <p className="text-[10px] text-slate-400">An admin user will be automatically created for this restaurant with the specified credentials.</p>
-            </div>
+            </>
           )}
 
           {/* Actions */}

@@ -66,6 +66,8 @@ export const SCREEN_PERMISSIONS = {
   // ─── Super Admin Portal Screens ───────────────────────────────────────
   // These are accessible only by SUPER_ADMIN role
   sa_dashboard: [ROLES.SUPER_ADMIN],
+  // Self-serve business applications (new-user onboarding review/approval)
+  sa_applications: [ROLES.SUPER_ADMIN],
   sa_restaurants: [ROLES.SUPER_ADMIN],
   sa_subscriptions: [ROLES.SUPER_ADMIN],
   // sa_users removed from Super Admin UI — kept in codebase for backward compatibility
@@ -170,6 +172,7 @@ export const FEATURES = {
   QR_ORDERING: 'qr_ordering',
   API_ACCESS: 'api_access',
   MULTI_TERMINAL: 'multi_terminal',
+  BARCODE_SCANNER: 'barcode_scanner',
 };
 
 // ─── Human-readable module labels (fallback — the live catalog comes from the API) ─
@@ -191,6 +194,7 @@ export const FEATURE_LABELS = {
   qr_ordering: 'QR Ordering',
   api_access: 'API Access',
   multi_terminal: 'Multi-Terminal',
+  barcode_scanner: 'Barcode Scanner',
 };
 
 // ─── Screen → required plan module ─────────────────────────────────────────
@@ -219,6 +223,9 @@ export const FEATURE_FOR_SETTING = {
   enableStock: FEATURES.INVENTORY,
   enableActiveOrders: FEATURES.ACTIVE_ORDERS,
   enableTableReservations: FEATURES.TABLES,
+  // Staff Roster visibility (plan entitlement still applies first — the
+  // Settings screen hides/locks this toggle when the plan excludes Staff)
+  enableStaffRoster: FEATURES.STAFF,
 };
 
 /**
@@ -274,7 +281,95 @@ export const canHandleBilling = (role) => {
   return BILLING_ROLES.includes(role.toUpperCase());
 };
 
-// ─── Helper: Check if a role can access a screen ───────────────────────────
+// ─── Staff permission layer (Part 1/2/23) ───────────────────────────────────
+// Backend permission keys for the nine configurable screens (screen ACCESS is
+// a permission key of its own) and the sidebar screen → key mapping.
+export const STAFF_SCREEN_KEYS = {
+  dashboard: 'dashboard.view',
+  new_order: 'pos.view',
+  order_taking: 'pos.view',
+  orders: 'kitchen.view',
+  tables: 'tables.view',
+  active_orders: 'active_orders.view',
+  menu: 'menu.view',
+  staff: 'staff.view',
+  reports: 'reports.view',
+  settings: 'settings.view',
+};
+
+/** All nine staff-configurable screen permission keys (for the catalog UI). */
+export const STAFF_SCREEN_PERMISSION_KEYS = [
+  'dashboard.view', 'pos.view', 'kitchen.view', 'tables.view',
+  'active_orders.view', 'menu.view', 'staff.view', 'reports.view', 'settings.view',
+];
+
+/** Sidebar screen name → permission key (undefined = not staff-configurable). */
+export const screenPermissionKey = (screen) => STAFF_SCREEN_KEYS[screen];
+
+/**
+ * Resolve a staff member's EFFECTIVE permission set (Part 4/23):
+ * role + restaurant module toggle + individual UserPermission overrides.
+ * Mirrors the backend resolution in src/utils/permissions.js (backend).
+ *
+ * @param {string} role
+ * @param {Array<{permissionKey:string, enabled:boolean}>} overrides
+ * @param {object} settings restaurant settings (module toggles)
+ * @param {object} subscription plan features
+ * @returns {{ full: boolean, keys: Set<string> }}
+ */
+export const resolveStaffPermissions = (role, overrides = [], settings = {}, subscription = null) => {
+  const upperRole = String(role || '').toUpperCase();
+  if (upperRole === 'ADMIN' || upperRole === 'SUPER_ADMIN') {
+    return { full: true, keys: new Set() };
+  }
+  const keys = new Set(getAccessibleScreens(upperRole)
+    .map((screen) => STAFF_SCREEN_KEYS[screen])
+    .filter(Boolean));
+  // Role action defaults (mirroring the backend role defaults, restricted to
+  // the role's screens so a screen the role cannot see never grants actions).
+  const ACTION_ROLE_DEFAULTS = {
+    MANAGER: ['orders.create', 'orders.add_item', 'orders.print_kot', 'orders.hold', 'orders.resume', 'orders.cancel', 'orders.transfer', 'orders.merge', 'orders.split', 'billing.view', 'billing.collect', 'billing.print', 'billing.reprint', 'billing.discount', 'menu.create', 'menu.edit', 'menu.delete', 'category.manage', 'subcategory.manage', 'menu.stock', 'staff.create', 'staff.edit', 'staff.status', 'staff.password', 'reports.sales', 'reports.payments', 'reports.staff', 'reports.management', 'reports.export', 'settings.edit', 'settings.kitchen'],
+    CASHIER: ['orders.create', 'orders.add_item', 'orders.hold', 'orders.resume', 'billing.view', 'billing.collect', 'billing.print', 'billing.reprint', 'reports.sales'],
+    KITCHEN: ['orders.add_item'],
+    WAITER: ['orders.create', 'orders.add_item', 'orders.print_kot'],
+  };
+  for (const action of ACTION_ROLE_DEFAULTS[upperRole] || []) keys.add(action);
+  for (const o of Array.isArray(overrides) ? overrides : []) {
+    if (!o || !o.permissionKey) continue;
+    if (o.enabled === true) keys.add(o.permissionKey);
+    else if (o.enabled === false) keys.delete(o.permissionKey);
+  }
+  // Layer 2: restaurant module toggle is authoritative.
+  const screenModule = { 'pos.view': 'enablePosOrdering', 'kitchen.view': 'enableKitchen', 'tables.view': 'enableFloorManagement', 'active_orders.view': 'enableActiveOrders', 'menu.view': 'enableMenu', 'reports.view': 'enableReports', 'staff.view': 'enableStaffRoster' };
+  for (const [key, setting] of Object.entries(screenModule)) {
+    if (settings[setting] === false) {
+      keys.delete(key);
+      if (key === 'pos.view') { keys.delete('orders.create'); keys.delete('orders.add_item'); }
+      if (key === 'kitchen.view') keys.delete('orders.print_kot');
+      if (key === 'menu.view') { keys.delete('menu.create'); keys.delete('menu.edit'); keys.delete('menu.delete'); keys.delete('category.manage'); keys.delete('subcategory.manage'); keys.delete('menu.stock'); }
+      if (key === 'reports.view') { keys.delete('reports.sales'); keys.delete('reports.payments'); keys.delete('reports.staff'); keys.delete('reports.management'); keys.delete('reports.export'); }
+    }
+  }
+  // Plan features gate the same screens the existing sidebar gates.
+  const featureBySetting = { enablePosOrdering: 'pos', enableKitchen: 'kitchen', enableFloorManagement: 'tables', enableActiveOrders: 'active_orders', enableMenu: 'menu', enableReports: 'reports' };
+  for (const setting of Object.keys(featureBySetting)) {
+    const feature = featureBySetting[setting];
+    if (settings[setting] !== false && subscription && !hasFeature(subscription, feature)) {
+      const key = Object.keys(screenModule).find((k) => screenModule[k] === setting);
+      if (key) keys.delete(key);
+    }
+  }
+  return { full: false, keys };
+};
+
+/** Does the effective permission set grant a screen or action key? */
+export const hasStaffPermission = (effective, key) => {
+  if (!effective) return false;
+  if (effective.full) return true;
+  return effective.keys.has(key);
+};
+
+// ─── Helper: Check if a role can access a screen ───────────────────────────────────
 export const canAccessScreen = (role, screen) => {
   if (!role || !screen) return false;
   const upperRole = role.toUpperCase();

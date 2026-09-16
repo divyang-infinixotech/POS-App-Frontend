@@ -483,6 +483,12 @@ export default function TablesPage() {
               }`}>
               <span className={`w-2 h-2 rounded-full ${fl.isActive !== false ? 'bg-[#16A34A]' : 'bg-slate-300'}`} />
               {fl.name}
+              {/* Assigned staff — light display only (Part 11) */}
+              {Array.isArray(fl.assignedStaff) && fl.assignedStaff.length > 0 && (
+                <span className="text-[8px] font-extrabold text-slate-400 hidden md:inline">
+                  · {fl.assignedStaff.map(s => s.name).join(', ')}
+                </span>
+              )}
             </button>
           ))}
         </div>

@@ -53,8 +53,15 @@ export default function UserManagement() {
     const { type, user } = confirmAction;
     try {
       if (type === 'reset') {
+        // The password is NEVER in the response — it is emailed to the user.
         const resp = await superAdminApi.resetUserPassword(user.id);
-        addToast(`Password reset for ${user.name}. New password: ${resp.data?.newPassword || 'reset123'}`, 'success');
+        const emailed = resp.data?.emailQueued;
+        addToast(
+          emailed
+            ? `Temporary password emailed to ${user.name} (${resp.data?.emailedTo || user.email}). They must change it at next login.`
+            : `Password reset for ${user.name}, but the email could not be sent. Use Resend Credentials in Email Settings.`,
+          emailed ? 'success' : 'warning'
+        );
       } else {
         await superAdminApi.deleteUser(user.id);
         addToast(`User ${user.name} deleted.`, 'success');

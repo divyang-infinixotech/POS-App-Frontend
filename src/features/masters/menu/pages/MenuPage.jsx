@@ -7,6 +7,11 @@ import { useSocketEvent } from '../../../../hooks/useSocket';
 import { subscribeMenuInvalidation } from '../../../../services/menuSync';
 import { PLACEHOLDER_IMAGE } from '../../../../lib/imagePlaceholder';
 import ConfirmationDialog from '../../../../components/ConfirmationDialog';
+import {
+  SUBCATEGORY_ALL,
+  subcategoryTabsFor,
+  filterMenuItems,
+} from '../../../../utils/menuHierarchy';
 
 // ── Numeric input sanitizer ──
 // One reusable rule for every numeric field (Price, Prep Time, Stock Quantity,
@@ -79,6 +84,9 @@ export default function MenuPage() {
   const [loading, setLoading] = useState(!cachedMenuItems);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('All');
+  const [selectedSubcategory, setSelectedSubcategory] = useState('All');
+  const [filterDietary, setFilterDietary] = useState('All');
+  const [subcategories, setSubcategories] = useState([]);
   const [showModal, setShowModal] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [imagePreview, setImagePreview] = useState('');
@@ -107,6 +115,13 @@ export default function MenuPage() {
   const [showUpdateCatModal, setShowUpdateCatModal] = useState(false);
   const [catSearchQuery, setCatSearchQuery] = useState('');
 
+  // ── Subcategory management state (Part 15) ──
+  const [showSubCatModal, setShowSubCatModal] = useState(false);
+  const [subCatCategory, setSubCatCategory] = useState('');
+  const [subCatForm, setSubCatForm] = useState({ name: '', description: '', sortOrder: 0 });
+  const [editingSubCat, setEditingSubCat] = useState(null);
+  const [subCatSaving, setSubCatSaving] = useState(false);
+
   // Form state
   const [itemName, setItemName] = useState('');
   const [itemPrice, setItemPrice] = useState(150);
@@ -117,6 +132,10 @@ export default function MenuPage() {
   const [itemStock, setItemStock] = useState('Available');
   const [itemLive, setItemLive] = useState(true);
   const [itemVeg, setItemVeg] = useState(true);
+  const [itemSubcategoryId, setItemSubcategoryId] = useState('');
+  // Restaurant dietary mode (Part 16): VEG_ONLY restaurants can only create
+  // VEG items — the Non-Veg option is hidden entirely (backend enforces too).
+  const restaurantVegOnly = (settings.dietaryMode || 'VEG_AND_NON_VEG') === 'VEG_ONLY';
   const [itemSku, setItemSku] = useState('');
   const [itemBarcode, setItemBarcode] = useState('');
   const [itemPrepTime, setItemPrepTime] = useState(10);
@@ -133,7 +152,25 @@ export default function MenuPage() {
     if (!cachedCategories || now - cachedCatFetched > CACHE_TTL) {
       loadCategories();
     }
+    loadSubcategories();
   }, []);
+
+  const loadSubcategories = async () => {
+    try {
+      const resp = await menuApi.getSubcategories();
+      const subs = (resp?.data?.subcategories || resp?.subcategories || []).map((s) => ({
+        id: s.id,
+        name: s.name,
+        categoryId: s.categoryId,
+        categoryName: s.category?.name || '',
+        isActive: s.isActive !== false,
+        sortOrder: s.sortOrder || 0,
+      }));
+      setSubcategories(subs);
+    } catch (e) {
+      console.error('Failed to load subcategories:', e);
+    }
+  };
 
   // ── Live stock sync: stock is reserved at ORDER PLACEMENT (not payment), so
   // any order lifecycle event changes stock levels. Invalidate the module cache
@@ -166,6 +203,9 @@ export default function MenuPage() {
         isLive: m.isAvailable !== false,
         stockStatus: m.isAvailable === false ? 'Out of Stock' : (m.currentStock !== undefined && m.currentStock < 10 && m.currentStock >= 0) ? 'Low Stock' : 'Available',
         isVeg: m.isVeg !== false,
+        dietaryType: m.dietaryType || (m.isVeg !== false ? 'VEG' : 'NON_VEG'),
+        subcategoryId: m.subcategoryId || null,
+        subcategoryName: m.subcategory?.name || null,
         sku: m.sku || `SKU-${String(m.id).padStart(4, '0')}`,
         barcode: m.barcode || '',
         prepTime: m.preparationTime || 10,
@@ -206,6 +246,61 @@ export default function MenuPage() {
       console.error('Failed to load categories:', e);
     } finally {
       setCatLoading(false);
+    }
+  };
+
+  // ── Subcategory CRUD Handlers (Part 15) ────────────────
+  const handleSubCatSubmit = async () => {
+    if (!subCatForm.name.trim() || !subCatCategory) return;
+    setSubCatSaving(true);
+    try {
+      const categoryId = parseInt(String(subCatCategory).replace('cat-', ''));
+      if (editingSubCat) {
+        await menuApi.updateSubcategory(editingSubCat.id, { name: subCatForm.name.trim(), sortOrder: subCatForm.sortOrder });
+        addToast('Subcategory updated', 'success');
+      } else {
+        await menuApi.createSubcategory({ categoryId, name: subCatForm.name.trim(), sortOrder: subCatForm.sortOrder || 0 });
+        addToast('Subcategory added', 'success');
+      }
+      setEditingSubCat(null);
+      setSubCatForm({ name: '', description: '', sortOrder: 0 });
+      loadSubcategories();
+    } catch (e) {
+      addToast(e?.message || 'Failed to save subcategory', 'error');
+    } finally {
+      setSubCatSaving(false);
+    }
+  };
+
+  const handleSubCatToggle = async (s) => {
+    try {
+      await menuApi.updateSubcategory(s.id, { isActive: !s.isActive });
+      loadSubcategories();
+    } catch (e) {
+      addToast(e?.message || 'Failed to update subcategory', 'error');
+    }
+  };
+
+  const handleSubCatDelete = async (s) => {
+    const itemCount = menuItems.filter(m => m.subcategoryId === s.id).length;
+    let moveTo;
+    if (itemCount > 0) {
+      const siblings = subcategories.filter(x => x.categoryId === s.categoryId && x.id !== s.id && x.isActive);
+      if (siblings.length === 0) {
+        moveTo = 'none'; // no siblings — items drop to None (still visible under the category)
+      } else {
+        moveTo = String(siblings[0].id); // move into the first sibling
+      }
+    }
+    try {
+      await menuApi.deleteSubcategory(s.id, moveTo);
+      addToast(itemCount > 0 ? `Deleted — ${itemCount} item(s) reassigned.` : 'Subcategory deleted', 'success');
+      if (editingSubCat?.id === s.id) setEditingSubCat(null);
+      loadSubcategories();
+      cachedMenuFetched = 0;
+      loadMenu();
+    } catch (e) {
+      addToast(e?.message || 'Failed to delete subcategory', 'error');
     }
   };
 
@@ -346,6 +441,8 @@ export default function MenuPage() {
     submittingRef.current = true;
     setSubmitting(true);
     try {
+      // Part 16: a VEG_ONLY restaurant can only ever submit VEG items.
+      const effectiveVeg = restaurantVegOnly ? true : itemVeg;
       const payload = {
         name: itemName.trim(),
         price: toNumber(itemPrice),
@@ -353,7 +450,9 @@ export default function MenuPage() {
         image: itemImage,
         imagePublicId: itemImagePublicId,
         isAvailable: itemLive,
-        isVeg: itemVeg,
+        isVeg: effectiveVeg,
+        dietaryType: effectiveVeg ? 'VEG' : 'NON_VEG',
+        subcategoryId: itemSubcategoryId ? parseInt(itemSubcategoryId) : null,
         sku: itemSku.trim() || `SKU-${Date.now()}`,
         barcode: itemBarcode,
         preparationTime: toNumber(itemPrepTime),
@@ -399,6 +498,7 @@ export default function MenuPage() {
     setItemStock('Available');
     setItemLive(true);
     setItemVeg(true);
+    setItemSubcategoryId('');
     setItemSku('');
     setItemBarcode('');
     setItemPrepTime(10);
@@ -513,13 +613,19 @@ export default function MenuPage() {
     if (cameraInputRef.current) cameraInputRef.current.value = '';
   };
 
-  const filteredItems = menuItems.filter(item => {
-    const matchesSearch = item.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      item.category.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (item.sku || '').toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesCat = selectedCategory === 'All' || item.category === selectedCategory;
-    return matchesSearch && matchesCat;
+  // Single shared hierarchy filter (Part 1 req. 8/15): category → subcategory →
+  // search → dietary, one implementation for every menu surface.
+  const filteredItems = filterMenuItems(menuItems, {
+    selectedCategory,
+    selectedSubcategory,
+    searchQuery,
+    dietaryFilter: filterDietary,
   });
+
+  // Tabs for the currently selected category (derived, not fetched per click).
+  const subcategoryTabs = selectedCategory === 'All'
+    ? []
+    : subcategoryTabsFor(menuItems, subcategories, selectedCategory);
 
   const lowStockItems = menuItems.filter(item => item.stockStatus === 'Low Stock' || item.stockQty < 10);
 
@@ -557,10 +663,69 @@ export default function MenuPage() {
           className="h-8 px-3 bg-white hover:bg-slate-50 border border-blue-500/40 text-blue-600 font-bold rounded-xl text-[10px] uppercase tracking-wider flex items-center gap-1.5 shadow-xs transition-all cursor-pointer">
           <Edit className="w-3.5 h-3.5" /> Update Category
         </button>
+        <button onClick={() => { setSubCatForm({ name: '', description: '', sortOrder: 0 }); setEditingSubCat(null); setShowSubCatModal(true); }}
+          className="h-8 px-3 bg-white hover:bg-slate-50 border border-violet-500/40 text-violet-600 font-bold rounded-xl text-[10px] uppercase tracking-wider flex items-center gap-1.5 shadow-xs transition-all cursor-pointer">
+          <Plus className="w-3.5 h-3.5" /> Manage Subcategories
+        </button>
       </div>
 
-      {/* Search & Category Filter */}
-      <div className="flex items-center gap-2 w-full">
+      {/* LEVEL 1 — Category tabs: horizontal scroll row, never wrapped (Part 1 req. 2/13) */}
+      <div className="flex items-center gap-1 bg-slate-100 p-0.5 rounded-xl border border-slate-200 text-[10px] font-bold overflow-x-auto no-scrollbar">
+        <button onClick={() => { setSelectedCategory('All'); setSelectedSubcategory(SUBCATEGORY_ALL); }}
+          className={`shrink-0 px-3 py-1.5 rounded-lg transition-all whitespace-nowrap cursor-pointer ${selectedCategory === 'All' ? 'bg-[#16A34A] text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'}`}>🍽️ All ({menuItems.length})</button>
+        {categories.filter(c => c.isActive !== false).map(cat => (
+          <button key={cat.id} onClick={() => { setSelectedCategory(cat.name); setSelectedSubcategory(SUBCATEGORY_ALL); }}
+            style={{
+              backgroundColor: selectedCategory === cat.name ? (cat.color || '#16A34A') : undefined,
+              borderColor: selectedCategory === cat.name ? (cat.color || '#16A34A') : undefined,
+              color: selectedCategory === cat.name ? '#fff' : undefined
+            }}
+            className={`shrink-0 px-3 py-1.5 rounded-lg transition-all whitespace-nowrap cursor-pointer ${
+              selectedCategory === cat.name 
+                ? 'text-white shadow-xs border' 
+                : 'text-slate-600 hover:text-slate-900 border border-transparent'
+            }`}>
+            {ICON_MAP[cat.icon || 'utensils'] || '🍽️'} {cat.name} ({menuItems.filter(m => m.category === cat.name).length})
+          </button>
+        ))}
+      </div>
+
+      {/* LEVEL 2 — Subcategory tab row, directly under the Category row (Part 1:
+          Category → Subcategory → Search/filter → Items; no dropdown anywhere).
+          Horizontal scroll row; renders whenever the category has subcategories
+          or items without one. */}
+      {selectedCategory !== 'All' && subcategoryTabs.length > 0 && (
+        <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
+          <span className="text-[9px] font-bold text-slate-400 uppercase shrink-0">{selectedCategory} ›</span>
+          <button onClick={() => setSelectedSubcategory(SUBCATEGORY_ALL)}
+            className={`shrink-0 h-8 px-3 rounded-xl text-[10px] font-bold transition-all cursor-pointer border whitespace-nowrap ${
+              selectedSubcategory === SUBCATEGORY_ALL
+                ? 'bg-[#16A34A] text-white border-[#16A34A] shadow-xs'
+                : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300'
+            }`}>
+            All ({menuItems.filter(m => m.category === selectedCategory).length})
+          </button>
+          {subcategoryTabs.map(tab => (
+            <button key={tab.id} onClick={() => setSelectedSubcategory(tab.id)}
+              className={`shrink-0 h-8 px-3 rounded-xl text-[10px] font-bold transition-all cursor-pointer border whitespace-nowrap ${
+                selectedSubcategory === tab.id
+                  ? 'bg-[#16A34A] text-white border-[#16A34A] shadow-xs'
+                  : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300'
+              }`}>
+              {tab.name} ({tab.count})
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* LEVEL 3 — Search & dietary filter (below both tab rows, Part 1 req. 12) */}
+      <div className="flex flex-wrap items-center gap-2 w-full">
+        <select value={filterDietary} onChange={(e) => setFilterDietary(e.target.value)}
+          className="h-10 px-2 bg-white border border-slate-200 rounded-xl text-[10px] font-bold outline-none focus:border-[#16A34A] cursor-pointer shrink-0">
+          <option value="All">Veg + Non-Veg</option>
+          <option value="VEG">Veg Only</option>
+          <option value="NON_VEG">Non-Veg Only</option>
+        </select>
         <div className="relative w-full sm:w-[300px] sm:min-w-[260px] sm:flex-shrink-0">
           <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
           <input type="text" placeholder="Search menu items..." value={searchQuery}
@@ -574,28 +739,7 @@ export default function MenuPage() {
             </button>
           )}
         </div>
-        <div className="flex-1 min-w-0 flex bg-slate-100 p-0.5 rounded-xl border border-slate-200 text-[10px] font-bold overflow-x-auto no-scrollbar items-center">
-          <button onClick={() => setSelectedCategory('All')}
-            className={`px-3 py-1.5 rounded-lg transition-all whitespace-nowrap cursor-pointer ${selectedCategory === 'All' ? 'bg-[#16A34A] text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'}`}>🍽️ All ({menuItems.length})</button>
-          {categories.filter(c => c.isActive !== false).map(cat => (
-            <button key={cat.id} onClick={() => setSelectedCategory(cat.name)}
-              style={{
-                backgroundColor: selectedCategory === cat.name ? (cat.color || '#16A34A') : undefined,
-                borderColor: selectedCategory === cat.name ? (cat.color || '#16A34A') : undefined,
-                color: selectedCategory === cat.name ? '#fff' : undefined
-              }}
-              className={`px-3 py-1.5 rounded-lg transition-all whitespace-nowrap cursor-pointer ${
-                selectedCategory === cat.name 
-                  ? 'text-white shadow-xs border' 
-                  : 'text-slate-600 hover:text-slate-900 border border-transparent'
-              }`}>
-              {ICON_MAP[cat.icon || 'utensils'] || '🍽️'} {cat.name} ({menuItems.filter(m => m.category === cat.name).length})
-            </button>
-          ))}
-        </div>
       </div>
-
-
 
       {/* Menu Grid */}
       <div className="bg-white p-5 rounded-[20px] border border-slate-200 shadow-xs">
@@ -638,7 +782,7 @@ export default function MenuPage() {
                         <Beef className="w-3 h-3 text-red-600 shrink-0" />
                       )}
                     </p>
-                    <span className="text-[9px] font-bold text-[#16A34A] uppercase font-mono shrink-0">{item.category}</span>
+                    <span className="text-[9px] font-bold text-[#16A34A] uppercase font-mono shrink-0">{item.category}{item.subcategoryName ? ` › ${item.subcategoryName}` : ''}</span>
                   </div>
                   <p className="text-[9px] text-slate-400 font-medium mt-1">
                     SKU: {item.sku} {item.prepTime && `· Prep: ${item.prepTime}m`}
@@ -676,6 +820,7 @@ export default function MenuPage() {
                       setLegacyImageWarning(item.imageIsExternal === true);
                       setItemStock(item.stockStatus); setItemLive(item.isLive);
                       setItemVeg(item.isVeg); setItemSku(item.sku || '');
+                      setItemSubcategoryId(item.subcategoryId ? String(item.subcategoryId) : '');
                       setItemBarcode(item.barcode || ''); setItemPrepTime(item.prepTime || 10);
                       setItemStockQty(item.stockQty ?? 50); setItemTax(item.taxPercentage ?? settings.gstPercentage ?? 5);
                       setItemKitchenCategory(item.kitchenCategory || 'Main Course');
@@ -697,6 +842,72 @@ export default function MenuPage() {
           </div>
         )}
       </div>
+
+      {/* ── MANAGE SUBCATEGORIES MODAL (Part 15) ── */}
+      {showSubCatModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs" onClick={() => setShowSubCatModal(false)}>
+          <div className="bg-white w-full max-w-md rounded-xl shadow-xl border border-slate-100 max-h-[85vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <div className="px-4 py-3 bg-slate-50 border-b border-slate-100 flex justify-between items-center rounded-t-xl shrink-0">
+              <h4 className="font-extrabold text-xs uppercase tracking-wider text-slate-800">Manage Subcategories</h4>
+              <button onClick={() => setShowSubCatModal(false)} className="text-slate-400 hover:text-slate-600 cursor-pointer"><X className="w-4 h-4" /></button>
+            </div>
+            <div className="p-4 space-y-3 overflow-y-auto flex-1">
+              {/* Category selector */}
+              <div className="space-y-1">
+                <label className="text-[9px] font-bold uppercase text-slate-400">Category *</label>
+                <select value={subCatCategory} onChange={(e) => { setSubCatCategory(e.target.value); setEditingSubCat(null); setSubCatForm({ name: '', description: '', sortOrder: 0 }); }}
+                  className="w-full h-9 px-2 bg-slate-50 border border-slate-200 rounded-lg outline-none focus:border-[#16A34A]">
+                  <option value="">Select a category…</option>
+                  {categories.map(c => (<option key={c.id} value={c.id}>{c.name}</option>))}
+                </select>
+              </div>
+
+              {subCatCategory && (
+                <>
+                  {/* Add / edit form */}
+                  <div className="grid grid-cols-[1fr_auto] gap-2 items-end">
+                    <div className="space-y-1">
+                      <label className="text-[9px] font-bold uppercase text-slate-400">{editingSubCat ? 'Edit Subcategory' : 'Add Subcategory'}</label>
+                      <input type="text" placeholder="e.g. Classic Pizza" value={subCatForm.name}
+                        onChange={(e) => setSubCatForm({ ...subCatForm, name: e.target.value })}
+                        className="w-full h-9 px-2 bg-slate-50 border border-slate-200 rounded-lg outline-none focus:border-[#16A34A]" />
+                    </div>
+                    <button onClick={handleSubCatSubmit} disabled={subCatSaving || !subCatForm.name.trim()}
+                      className="h-9 px-3 bg-[#16A34A] hover:bg-[#15803D] text-white font-bold rounded-lg text-[10px] uppercase tracking-wider cursor-pointer disabled:opacity-50">
+                      {editingSubCat ? 'Save' : 'Add'}
+                    </button>
+                  </div>
+
+                  {/* List for this category */}
+                  <div className="space-y-1.5">
+                    {subcategories.filter(s => String(s.categoryId) === String(subCatCategory)).map(s => (
+                      <div key={s.id} className="flex items-center gap-2 p-2.5 border border-slate-200 rounded-lg">
+                        <div className="flex-1 min-w-0">
+                          <p className={`text-xs font-bold truncate ${s.isActive ? 'text-slate-800' : 'text-slate-400 line-through'}`}>{s.name}</p>
+                          <p className="text-[9px] text-slate-400">
+                            {menuItems.filter(m => m.subcategoryId === s.id).length} items · {s.isActive ? 'Active' : 'Inactive'}
+                          </p>
+                        </div>
+                        <button onClick={() => handleSubCatToggle(s)}
+                          className={`text-[9px] font-bold px-2 py-1 rounded-md cursor-pointer ${s.isActive ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}>
+                          {s.isActive ? 'Deactivate' : 'Activate'}
+                        </button>
+                        <button onClick={() => { setEditingSubCat(s); setSubCatForm({ name: s.name, description: '', sortOrder: s.sortOrder || 0 }); }}
+                          className="p-1.5 bg-slate-100 hover:bg-blue-100 rounded text-slate-500 cursor-pointer" title="Edit"><Edit className="w-3 h-3" /></button>
+                        <button onClick={() => handleSubCatDelete(s)}
+                          className="p-1.5 bg-red-50 hover:bg-red-100 text-red-600 rounded cursor-pointer" title="Delete"><Trash className="w-3 h-3" /></button>
+                      </div>
+                    ))}
+                    {subcategories.filter(s => String(s.categoryId) === String(subCatCategory)).length === 0 && (
+                      <p className="text-[10px] text-slate-400 italic text-center py-2">No subcategories yet for this category.</p>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── UPDATE CATEGORY — SELECT CATEGORY MODAL ── */}
       {showUpdateCatModal && (
@@ -907,11 +1118,23 @@ export default function MenuPage() {
                 </div>
                 <div className="space-y-1">
                   <label className="text-[9px] font-bold uppercase text-slate-400">Category *</label>
-                  <select value={itemCategory} onChange={(e) => setItemCategory(e.target.value)}
+                  <select value={itemCategory} onChange={(e) => { setItemCategory(e.target.value); setItemSubcategoryId(''); }}
                     className="w-full h-8 px-1 bg-slate-50 border rounded-lg outline-none">
                     {categories.map(c => (<option key={c.id} value={c.name}>{c.name}</option>))}
                   </select>
                 </div>
+              </div>
+
+              {/* Subcategory (Part 16) — depends on the selected category */}
+              <div className="space-y-1">
+                <label className="text-[9px] font-bold uppercase text-slate-400">Subcategory</label>
+                <select value={itemSubcategoryId} onChange={(e) => setItemSubcategoryId(e.target.value)}
+                  className="w-full h-8 px-1 bg-slate-50 border rounded-lg outline-none">
+                  <option value="">None</option>
+                  {subcategories.filter(s => s.isActive && s.categoryName === itemCategory).map(s => (
+                    <option key={s.id} value={String(s.id)}>{s.name}</option>
+                  ))}
+                </select>
               </div>
               <div className="space-y-1">
                 <label className="text-[9px] font-bold uppercase text-slate-400">Description</label>
@@ -927,15 +1150,21 @@ export default function MenuPage() {
                     placeholder="Auto-generated" className="w-full h-8 px-2 bg-slate-50 border rounded-lg outline-none font-mono text-[10px]" />
                 </div>
                 <div className="space-y-1">
-                  <label className="text-[9px] font-bold uppercase text-slate-400">Barcode</label>
+                  <label className="text-[9px] font-bold uppercase text-slate-400">Barcode (Optional)</label>
                   <input type="text" value={itemBarcode} onChange={(e) => setItemBarcode(e.target.value)}
-                    placeholder="Optional" className="w-full h-8 px-2 bg-slate-50 border rounded-lg outline-none font-mono text-[10px]" />
+                    placeholder="e.g. 8901234567890" className="w-full h-8 px-2 bg-slate-50 border rounded-lg outline-none font-mono text-[10px]" />
+                  <p className="text-[8px] text-slate-400">Scannable in POS when the plan includes the Barcode Scanner.</p>
                 </div>
               </div>
 
               {/* Veg/Non-Veg Type (Kitchen Section removed from dialog) */}
               <div className="space-y-1">
                 <label className="text-[9px] font-bold uppercase text-slate-400">Type</label>
+                {restaurantVegOnly && (
+                  <p className="text-[9px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-2 py-1">
+                    This restaurant is configured for Veg Only — all items are vegetarian.
+                  </p>
+                )}
                 <div className="flex gap-2 h-8">
                   <button type="button" onClick={() => setItemVeg(true)}
                     className={`flex-1 rounded-lg border text-[10px] font-bold flex items-center justify-center gap-1 cursor-pointer ${
@@ -943,12 +1172,14 @@ export default function MenuPage() {
                     }`}>
                     <Leaf className="w-3 h-3" /> Veg
                   </button>
-                  <button type="button" onClick={() => setItemVeg(false)}
-                    className={`flex-1 rounded-lg border text-[10px] font-bold flex items-center justify-center gap-1 cursor-pointer ${
-                      !itemVeg ? 'bg-red-50 border-red-400 text-red-700' : 'bg-slate-50 border-slate-200 text-slate-500'
-                    }`}>
-                    <Beef className="w-3 h-3" /> Non-Veg
-                  </button>
+                  {!restaurantVegOnly && (
+                    <button type="button" onClick={() => setItemVeg(false)}
+                      className={`flex-1 rounded-lg border text-[10px] font-bold flex items-center justify-center gap-1 cursor-pointer ${
+                        !itemVeg ? 'bg-red-50 border-red-400 text-red-700' : 'bg-slate-50 border-slate-200 text-slate-500'
+                      }`}>
+                      <Beef className="w-3 h-3" /> Non-Veg
+                    </button>
+                  )}
                 </div>
               </div>
 

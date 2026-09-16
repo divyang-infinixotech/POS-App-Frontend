@@ -324,6 +324,16 @@ export default function KitchenPage() {
                     <div className="flex items-center gap-2">
                       <span className="font-bold text-xs text-[#16A34A] font-mono shrink-0">{item.quantity}x</span>
                       <p className="font-extrabold text-xs text-slate-800 truncate">{item.menuItem?.name}</p>
+                      {/* Dietary badge (Part 7): ● VEG / ● NON-VEG for every item where known. */}
+                      {(() => {
+                        const dietary = item.menuItem?.dietaryType || (item.menuItem?.isVeg === true ? 'VEG' : item.menuItem?.isVeg === false ? 'NON_VEG' : null);
+                        if (!dietary) return null;
+                        return (
+                          <span className={`shrink-0 text-[9px] font-extrabold flex items-center gap-0.5 ${dietary === 'VEG' ? 'text-emerald-600' : 'text-red-600'}`}>
+                            ● {dietary === 'VEG' ? 'VEG' : 'NON-VEG'}
+                          </span>
+                        );
+                      })()}
                     </div>
                     {item.notes && (
                       <p className="text-[9px] text-red-600 font-bold bg-red-50/50 border border-red-100 rounded px-1.5 py-0.5 mt-1.5 inline-block">

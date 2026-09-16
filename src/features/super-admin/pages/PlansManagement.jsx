@@ -14,14 +14,34 @@ const FEATURE_ICONS = {
   dashboard: Layers, pos: ShoppingCart, menu: Utensils, billing: CreditCard,
   tables: Layers, active_orders: Layers, kitchen: Utensils, staff: Users, customers: Users,
   reports: Cpu, floors: Layers, inventory: Package, printers: Printer,
-  settings: SettingsIcon,
+  settings: SettingsIcon, barcode_scanner: Printer,
 };
 
-// The ONLY restaurant modules that exist in the app
+// The ONLY restaurant modules that exist in the app — mirrors
+// AVAILABLE_RESTAURANT_MODULES in the backend (subscription.config.js).
+// Part 11: barcode_scanner is plan-controlled (Basic OFF, Premium ON).
 const AVAILABLE_RESTAURANT_MODULE_KEYS = [
   'dashboard', 'pos', 'billing', 'floors', 'tables', 'kitchen',
   'active_orders', 'menu', 'customers', 'staff', 'reports', 'settings',
+  'barcode_scanner',
 ];
+
+// ── Central Basic POS capability map (mirrors backend
+// RESTAURANT_ONLY_MODULES in subscription.config.js — the backend strips
+// these from every Basic-plan payload regardless of what is sent). ──
+const RESTAURANT_ONLY_MODULES = ['floors', 'tables', 'kitchen'];
+const MODULE_LABELS = {
+  dashboard: 'Dashboard', pos: 'POS Ordering', billing: 'Billing & Payments',
+  floors: 'Floor Management', tables: 'Table Management', kitchen: 'Kitchen (KOT)',
+  active_orders: 'Active Orders', menu: 'Menu & Stock', customers: 'Customers',
+  staff: 'Staff', reports: 'Reports & Sales', settings: 'Settings',
+  barcode_scanner: 'Barcode Scanner',
+};
+/** Modules selectable for the given business mode (authoritative: backend). */
+const modulesForMode = (mode) =>
+  mode === 'RESTAURANT'
+    ? AVAILABLE_RESTAURANT_MODULE_KEYS
+    : AVAILABLE_RESTAURANT_MODULE_KEYS.filter((k) => !RESTAURANT_ONLY_MODULES.includes(k));
 
 const LIMIT_FIELDS = [
   { key: 'maxUsers', label: 'Max Users', icon: Users, hint: 'Leave empty for unlimited' },
@@ -72,8 +92,30 @@ const PlanFormModal = ({ plan, onClose, onSaved }) => {
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  // Part 9: Super Admin selects WHICH modules this plan includes. The options
+  // come from the canonical module registry (AVAILABLE_RESTAURANT_MODULE_KEYS,
+  // mirroring the backend config + PlanModule catalog) — no hardcoded lists.
+  const [selectedModules, setSelectedModules] = useState(() => new Set(includedFeatures));
 
-  const set = (key, val) => setForm((f) => ({ ...f, [key]: val }));
+  const set = (key, val) => setForm((f) => {
+    const next = { ...f, [key]: val };
+    // Mode switch → drop restaurant-only selections that are no longer applicable.
+    if (key === 'businessMode' && val !== 'RESTAURANT') {
+      setSelectedModules((prev) => {
+        const filtered = new Set([...prev].filter((k) => !RESTAURANT_ONLY_MODULES.includes(k)));
+        return filtered;
+      });
+    }
+    return next;
+  });
+
+  const toggleModule = (key) => {
+    setSelectedModules((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -94,15 +136,35 @@ const PlanFormModal = ({ plan, onClose, onSaved }) => {
         maxBranches: form.maxBranches === '' ? null : Number(form.maxBranches),
         maxOrdersPerMonth: form.maxOrdersPerMonth === '' ? null : Number(form.maxOrdersPerMonth),
         storageLimitMB: form.storageLimitMB === '' ? null : Number(form.storageLimitMB),
-        // All available modules are included in the plan entitlements.
+        // Part 9: only the Super-Admin-selected modules are entitlements.
         // Backend syncs PlanModulePermission and Plan.features from this.
-        modules: AVAILABLE_RESTAURANT_MODULE_KEYS.map((key) => ({ moduleKey: key, enabled: true })),
-        features: [...AVAILABLE_RESTAURANT_MODULE_KEYS],
+        // Capability rule: restaurant-only modules are excluded from the
+        // payload for BASIC_POS plans (the backend strips them anyway —
+        // this keeps the payload honest and the two layers consistent).
+        modules: modulesForMode(form.businessMode).map((key) => ({ moduleKey: key, enabled: selectedModules.has(key) })),
+        features: modulesForMode(form.businessMode).filter((key) => selectedModules.has(key)),
         isActive: form.isActive, isDefault: form.isDefault,
         sortOrder: Number(form.sortOrder || 0),
       };
-      if (isEdit) await superAdminApi.updatePlan(plan.id, payload);
-      else await superAdminApi.createPlan(payload);
+      if (isEdit) {
+        try {
+          await superAdminApi.updatePlan(plan.id, payload);
+        } catch (modeErr) {
+          // Plan mode changed while subscriptions exist → backend demands an
+          // explicit confirmation (409 PLAN_MODE_CHANGE_CONFIRMATION).
+          if (modeErr?.code === 'PLAN_MODE_CHANGE_CONFIRMATION' || /confirmModeChange/.test(modeErr?.message || '')) {
+            const ok = window.confirm(
+              'This plan is used by existing subscriptions. Changing its mode re-categorizes those subscriptions. Continue?'
+            );
+            if (!ok) { setError('Plan mode change cancelled'); return; }
+            await superAdminApi.updatePlan(plan.id, { ...payload, confirmModeChange: true });
+          } else {
+            throw modeErr;
+          }
+        }
+      } else {
+        await superAdminApi.createPlan(payload);
+      }
       onSaved();
     } catch (err) {
       setError(err.message || 'Failed to save plan');
@@ -239,27 +301,39 @@ const PlanFormModal = ({ plan, onClose, onSaved }) => {
             </div>
           </div>
 
-          {/* Plan Entitlements — read-only feature summary */}
+          {/* Plan Entitlements — SELECTABLE module checkboxes (Part 9) */}
           <div>
             <div className="flex items-center gap-2 mb-3">
               <Sparkles className="w-3.5 h-3.5 text-[#16A34A]" />
               <p className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500">Plan Entitlements</p>
             </div>
-            <p className="text-[10px] text-slate-400 mb-3">This plan includes access to all platform modules. Restaurants subscribed to this plan receive full functionality.</p>
-            <div className="bg-slate-50 rounded-xl p-4 border border-slate-100">
-              <div className="flex flex-wrap gap-1.5">
-                {includedFeatures.map((key) => {
-                  const Icon = FEATURE_ICONS[key] || Package;
-                  const label = FEATURE_LABELS[key] || key;
-                  return (
-                    <span key={key} className="inline-flex items-center gap-1.5 text-[10px] font-bold px-2.5 py-1.5 rounded-lg bg-[#16A34A]/10 text-[#16A34A] border border-[#16A34A]/20">
-                      <Icon className="w-3 h-3" />
-                      {label}
-                    </span>
-                  );
-                })}
-              </div>
+            <p className="text-[10px] text-slate-400 mb-3">Select the modules this plan includes. Restaurants on this plan can toggle these modules on/off; excluded modules are blocked server-side.</p>
+            {form.businessMode === 'BASIC_POS' && (
+              <p className="text-[10px] font-bold text-amber-600 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 mb-2">
+                Basic POS plan — Restaurant-only modules (Floor Management, Table Management, Kitchen/KOT) are not applicable and are hidden.
+              </p>
+            )}
+            <div className="bg-slate-50 rounded-xl p-4 border border-slate-100 grid grid-cols-2 md:grid-cols-3 gap-2">
+              {modulesForMode(form.businessMode).map((key) => {
+                const Icon = FEATURE_ICONS[key] || Package;
+                const label = MODULE_LABELS[key] || FEATURE_LABELS[key] || key;
+                const selected = selectedModules.has(key);
+                return (
+                  <label key={key} className={`flex items-center gap-2 text-[10px] font-bold px-2.5 py-2 rounded-lg border cursor-pointer transition-all ${
+                    selected ? 'bg-[#16A34A]/10 text-[#16A34A] border-[#16A34A]/30' : 'bg-white text-slate-500 border-slate-200 hover:border-slate-300'
+                  }`}>
+                    <input type="checkbox" checked={selected} onChange={() => toggleModule(key)} className="w-3.5 h-3.5 accent-[#16A34A]" />
+                    <Icon className="w-3 h-3 shrink-0" />
+                    <span className="truncate">{label}</span>
+                  </label>
+                );
+              })}
             </div>
+            {selectedModules.size === 0 && (
+              <p className="text-[10px] font-bold text-red-600 bg-red-50 border border-red-200 rounded-xl px-3 py-2 mt-2">
+                A plan with no modules grants restaurants no features.
+              </p>
+            )}
           </div>
 
           <label className="flex items-center gap-2 text-[11px] font-bold text-slate-600 cursor-pointer">
@@ -307,6 +381,7 @@ export default function PlansManagement() {
   const [view, setView] = useState('cards');
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
+  const [modeFilter, setModeFilter] = useState('all'); // all | RESTAURANT | BASIC_POS
   const [sortBy, setSortBy] = useState('sortOrder');
   const [sortDir, setSortDir] = useState('asc');
   const [toast, setToast] = useState('');
@@ -385,6 +460,8 @@ export default function PlansManagement() {
     }
     if (statusFilter === 'active') list = list.filter((p) => p.isActive);
     if (statusFilter === 'inactive') list = list.filter((p) => !p.isActive);
+    // Group/filter by Business (Plan) Mode: All / Restaurant / Basic.
+    if (modeFilter !== 'all') list = list.filter((p) => (p.businessMode || 'RESTAURANT') === modeFilter);
     const dir = sortDir === 'desc' ? -1 : 1;
     list.sort((a, b) => {
       let av = a[sortBy];
@@ -447,6 +524,11 @@ export default function PlansManagement() {
           <option value="all">All Status</option>
           <option value="active">Active</option>
           <option value="inactive">Inactive</option>
+        </select>
+        <select value={modeFilter} onChange={(e) => setModeFilter(e.target.value)} className="h-8 px-2.5 bg-slate-50 border border-slate-200 rounded-lg text-[11px] font-bold text-slate-600 outline-none" title="Filter by Business / Plan Mode">
+          <option value="all">All Modes</option>
+          <option value="RESTAURANT">Restaurant Mode</option>
+          <option value="BASIC_POS">Basic Mode</option>
         </select>
         <select value={sortBy} onChange={(e) => { setSortBy(e.target.value); }} className="h-8 px-2.5 bg-slate-50 border border-slate-200 rounded-lg text-[11px] font-bold text-slate-600 outline-none">
           {SORT_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}

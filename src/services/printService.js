@@ -501,10 +501,21 @@ export function generateKotHtml({
     const name = item.menuItem?.name || item.name || 'Item';
     const qty = item.quantity || item.qty || 1;
     const notes_text = item.notes || '';
+    // Part 18: dietary type flows with the menu item — kitchen staff can spot
+    // veg/non-veg at a glance. Resolution order: explicit dietaryType →
+    // menuItem.dietaryType → legacy isVeg flag (backward compatible).
+    const dietary = item.dietaryType
+      || item.menuItem?.dietaryType
+      || (item.isVeg === true || item.menuItem?.isVeg === true ? 'VEG'
+        : item.isVeg === false || item.menuItem?.isVeg === false ? 'NON_VEG'
+        : null);
+    const dietaryTag = dietary
+      ? `<small class="dietary ${dietary === 'VEG' ? 'dietary-veg' : 'dietary-nonveg'}">● ${dietary === 'VEG' ? 'VEG' : 'NON-VEG'}</small>`
+      : '';
     return `
       <tr${i % 2 === 1 ? ' class="alt"' : ''}>
         <td class="qty">${qty}x</td>
-        <td class="item">${escapeHtml(name)}${notes_text ? `<br><small class="note">📝 ${escapeHtml(notes_text)}</small>` : ''}</td>
+        <td class="item">${escapeHtml(name)}${dietaryTag}${notes_text ? `<br><small class="note">📝 ${escapeHtml(notes_text)}</small>` : ''}</td>
       </tr>`;
   }).join('');
 
@@ -537,6 +548,9 @@ export function generateKotHtml({
   td { padding: 1.5px 0; vertical-align: top; }
   tr.alt td { background-color: #f5f5f5; }
   .note { font-style: italic; color: #dc2626; font-size: 9px; }
+  .dietary { font-weight: bold; font-size: 8px; }
+  .dietary-veg { color: #16a34a; }
+  .dietary-nonveg { color: #dc2626; }
   .footer { text-align: center; margin-top: 8px; font-size: 10px; color: #555; }
   .label { font-weight: bold; }
   @media print {

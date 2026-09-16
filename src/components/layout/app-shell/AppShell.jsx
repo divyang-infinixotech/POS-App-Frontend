@@ -5,6 +5,7 @@ import Sidebar from '../sidebar/Sidebar';
 import Header from '../header/Header';
 import { useAuthStore, useUiStore, useSettingsStore, useCartStore } from '../../../store';
 import LoginPage from '../../../features/auth/pages/LoginPage';
+import ForceChangePasswordPage from '../../../features/auth/pages/ForceChangePasswordPage';
 import LockScreen from './LockScreen';
 import { useSocketConnection, useSocketEvent } from '../../../hooks/useSocket';
 import { invalidateMenuData } from '../../../services/menuSync';
@@ -16,6 +17,9 @@ import TakeOrderWizard from '../../../features/pos/workspace/components/TakeOrde
 import ErrorBoundary from '../../common/ErrorBoundary';
 import { AlertTriangle, X, CheckCircle2, ShieldAlert } from 'lucide-react';
 import { canAccessScreen, getDefaultScreenForRole, SCREEN_FEATURES, hasFeature, isScreenAllowedForBusinessMode } from '../../../utils/permissions';
+import OnboardingFlow from '../../../features/onboarding/OnboardingFlow';
+import RegisterPage from '../../../features/onboarding/RegisterPage';
+import { isSelfServeOnboarding, resolveHomeScreen } from '../../../features/onboarding/onboarding.lib';
 
 // ── Route-level code splitting ──────────────────────────────────────────────
 // Heavy feature pages are lazy-loaded so the initial bundle only carries the
@@ -29,6 +33,7 @@ const StaffPage = lazy(() => import('../../../features/masters/staff/pages/Staff
 const ReportsPage = lazy(() => import('../../../features/reports/pages/ReportsPage'));
 const SettingsPage = lazy(() => import('../../../features/settings/pages/SettingsPage'));
 const SubscriptionPage = lazy(() => import('../../../features/subscription/pages/SubscriptionPage'));
+const BusinessApplications = lazy(() => import('../../../features/super-admin/pages/BusinessApplications'));
 
 // ── Super Admin screens (restaurant-side users never load these chunks) ──
 const SuperAdminSidebar = lazy(() => import('../../../features/super-admin/components/SuperAdminSidebar'));
@@ -118,6 +123,7 @@ const ScreenRenderer = {
   sa_gateway: PaymentGateway,
   sa_audit: AuditLogs,
   sa_profile: ProfilePage,
+  sa_applications: BusinessApplications,
 };
 
 // ── Maps screen names → settings key for module visibility ──
@@ -128,11 +134,13 @@ const SCREEN_TO_SETTING = {
   menu: 'enableMenu',
   reports: 'enableReports',
   order_taking: 'enablePosOrdering',
+  staff: 'enableStaffRoster',
 };
 
 // ── Super Admin screens never need module visibility checks ──
 const SUPER_ADMIN_SCREENS = [  'sa_dashboard', 'sa_restaurants', 'sa_subscriptions',
   'sa_plans', 'sa_invoices', 'sa_reports', 'sa_notifications', 'sa_settings', 'sa_gateway', 'sa_audit', 'sa_profile',
+  'sa_applications',
 ];
 
 // ── Priority-ordered fallback screens (first enabled module wins) ──
@@ -298,8 +306,8 @@ export default function AppShell() {
   useAutoLock();
 
   const { currentScreen, setScreen } = useUiStore();
-  const { user, subscription, isUnlocked, isAuthenticated, sessionReady, restoreSession } = useAuthStore();
-  const { settings, moduleVisibilityVersion } = useSettingsStore();
+  const { user, subscription, onboarding, isUnlocked, isAuthenticated, sessionReady, restoreSession } = useAuthStore();
+  const { settings, lastFetched, fetchSettings, moduleVisibilityVersion } = useSettingsStore();
   const { toasts, apiError, clearApiError } = useUiStore();
 
   // ── Cross-restaurant cache safety ──
@@ -338,18 +346,62 @@ export default function AppShell() {
     return () => window.removeEventListener('pos:session-expired', handleSessionExpired);
   }, []);
 
-  // ── After session restored, redirect to role's default screen if still on login ──
+  // ── Auto-load restaurant settings ONCE the session is known to be an ACTIVE
+  // POS account. Onboarding applicants (restaurant not ACTIVE yet) must never
+  // call POS-protected endpoints, so they are skipped here — their settings
+  // load on “Enter Restaurant POS” after activation.
+  const autoSettingsFetchedRef = useRef(false);
+  useEffect(() => {
+    if (!sessionReady || !isAuthenticated || !user) return;
+    if (isSelfServeOnboarding(onboarding)) return;
+    if (autoSettingsFetchedRef.current) return;
+    autoSettingsFetchedRef.current = true;
+    if (!lastFetched || Date.now() - lastFetched > 60000) {
+      fetchSettings();
+    }
+  }, [sessionReady, isAuthenticated, user, onboarding, lastFetched, fetchSettings]);
+
+  // ── After session restored, redirect to the user's home screen if still on login ──
+  // Self-serve applicants whose restaurant is not ACTIVE yet go into the
+  // onboarding wizard (resume at the correct step); everyone else lands on
+  // their role's default screen. Backend status decides, never the client.
   useEffect(() => {
     if (sessionReady && isAuthenticated && user && currentScreen === 'login') {
-      const defaultScreen = getDefaultScreenForRole(user.role);
-      setScreen(defaultScreen);
+      setScreen(resolveHomeScreen(user, onboarding));
     }
-  }, [sessionReady, isAuthenticated, user, currentScreen, setScreen]);
+  }, [sessionReady, isAuthenticated, user, onboarding, currentScreen, setScreen]);
+
+  // ── Onboarding routing guard ──
+  // An applicant (ADMIN whose restaurant is not ACTIVE yet) is confined to the
+  // wizard — any POS screen redirects back to onboarding. An ACTIVE account
+  // (or any non-applicant) that somehow lands on the onboarding screen is sent
+  // to their normal home screen. Frontend guarding is UX only; the backend
+  // auth middlewares remain the authoritative access boundary.
+  useEffect(() => {
+    if (!sessionReady || !isAuthenticated || !user) return;
+    if (currentScreen === 'login') return;
+    if (!isUnlocked) return;
+    const applicant = isSelfServeOnboarding(onboarding);
+    if (currentScreen === 'register') {
+      setScreen(resolveHomeScreen(user, onboarding));
+      return;
+    }
+    if (applicant && currentScreen !== 'onboarding') {
+      setScreen('onboarding');
+      return;
+    }
+    if (!applicant && currentScreen === 'onboarding') {
+      setScreen(getDefaultScreenForRole(user.role));
+    }
+  }, [sessionReady, isAuthenticated, isUnlocked, user, onboarding, currentScreen, setScreen]);
 
   // ── Route Protection: Redirect if role lacks permission or module is disabled ──
   // Also re-checks whenever moduleVisibilityVersion increments (reactive to settings changes)
   useEffect(() => {
     if (isAuthenticated && isUnlocked && user && currentScreen !== 'login') {
+      // Onboarding wizard + registration are gated by their own guard/render
+      // branches (backend-status driven) — never re-routed as POS screens.
+      if (currentScreen === 'onboarding' || currentScreen === 'register') return;
       const userRole = (user.role || '').toUpperCase();
       
       // SUPER_ADMIN screens are always allowed for SUPER_ADMIN role
@@ -415,14 +467,40 @@ export default function AppShell() {
     );
   }
 
+  // ── Forced first-login password change ──
+  // Users provisioned with an emailed temporary password (mustChangePassword,
+  // set by the backend and mirrored on login/profile responses) MUST change it
+  // before anything else renders. The backend independently refuses every
+  // other route until the change is done — this UI is a mirror, not the gate.
+  if (isAuthenticated && isUnlocked && user?.mustChangePassword) {
+    return <ForceChangePasswordPage />;
+  }
+
   // Show lock screen if terminal is locked but user is authenticated (token exists)
   if (!isUnlocked && isAuthenticated) {
     return <LockScreen />;
   }
 
-  // Show login if not unlocked and not authenticated
+  // Show login if not unlocked and not authenticated. "Create New Account"
+  // renders the public registration screen instead (also pre-auth).
   if (!isUnlocked) {
+    if (currentScreen === 'register') return <RegisterPage />;
     return <LoginPage />;
+  }
+
+  // ── Self-serve onboarding wizard — standalone (no POS shell) ──
+  // `onboarding` here comes from authStore (login/profile). The auth store
+  // sanitizes payloads: a non-null value is ALWAYS a genuine in-progress
+  // self-serve application (selfServe restaurant + non-ACTIVE lifecycle
+  // state). A normal/ACTIVE POS user therefore never renders the wizard and
+  // never triggers /onboarding/status polling — the root cause of the 403
+  // "Could not load your application" loop.
+  const applicant = !!user && isSelfServeOnboarding(onboarding);
+  if (currentScreen === 'onboarding') {
+    if (applicant) return <OnboardingFlow />;
+    // Non-applicant transiently on the wizard screen — show their normal home
+    // (the routing-guard effect below redirects to the role's home screen).
+    return <DashboardPage />;
   }
 
   // Route protection: check if current screen is allowed for this role

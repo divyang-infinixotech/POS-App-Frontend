@@ -5,7 +5,7 @@ import {
   Globe, FileText, Shield, KeyRound, Lock,
   Check,
   AlertCircle, Loader2, Wifi, WifiOff,
-  Monitor, Layout, Plus
+  Monitor, Layout, Plus, Utensils, Leaf, Beef, ShoppingCart, ScanBarcode
 } from 'lucide-react';
 import { useSettingsStore, useUiStore, useAuthStore } from '../../../store';
 import { FEATURE_FOR_SETTING, hasFeature } from '../../../utils/permissions';
@@ -141,12 +141,9 @@ const SECTIONS = [
 // `modes` controls which business modes expose the toggle — Restaurant mode
 // never shows POS-Ordering-only controls.
 const MODULE_TOGGLES = [
-  {
-    key: 'enablePosOrdering',
-    label: 'Enable POS Ordering Screen',
-    description: "If ON: All orders start from POS Ordering (New Ticket button is hidden). If OFF: Hide 'POS Ordering' from the sidebar and show the New Ticket button instead.",
-    modes: ['restaurant', 'counter', 'hybrid'],
-  },
+  // Part 10: "Enable POS Ordering Screen" is intentionally NOT a toggle.
+  // POS Ordering is always enabled — orders can only be created through the
+  // POS Ordering workflow, so a restaurant admin must never be able to hide it.
   {
     key: 'enableCounterSale',
     label: 'Enable Basic POS Quick Billing',
@@ -207,12 +204,18 @@ const MODULE_TOGGLES = [
     description: 'If OFF: Hide Transfer button. If ON: Allow table transfer',
     modes: ['restaurant', 'hybrid'],
   },
+  {
+    key: 'enableStaffRoster',
+    label: 'Enable Staff Roster',
+    description: 'If OFF: Hide Staff Roster from the sidebar and block staff-management screens. If ON: Staff Roster is visible according to plan and permissions.',
+    modes: ['restaurant', 'counter', 'hybrid'],
+  },
 ];
 
 // ─── Main Component ─────────────────────────────────────────────────────────
 
 export default function SettingsPage() {
-  const { settings, fetchSettings, saveSettings, updateSettings, loading, saving, error, clearError, uploadLogo, deleteLogo } = useSettingsStore();
+  const { settings, fetchSettings, saveSettings, updateSettings, loading, saving, error, clearError, uploadLogo, deleteLogo, barcodeScannerAvailable } = useSettingsStore();
   const { addToast, setScreen } = useUiStore();
   const { logout, changePassword, subscription } = useAuthStore();
   const [activeSection, setActiveSection] = useState('general');
@@ -259,7 +262,7 @@ export default function SettingsPage() {
     const mode = businessMode;
     switch (secKey) {
       case 'general':
-        labels.push('Restaurant Name', 'Owner Name', 'Email', 'Phone', 'GST Number', 'FSSAI Number', 'Website', 'Address', 'City', 'State', 'Country', 'Postal Code', 'Restaurant Logo', 'Receipt Footer Message');
+        labels.push('Restaurant Name', 'Owner Name', 'Email', 'Phone', 'TAX Number', 'FSSAI Number', 'Website', 'Address', 'City', 'State', 'Country', 'Postal Code', 'Restaurant Logo', 'Receipt Footer Message');
         break;
       case 'pos':
         labels.push('Currency', 'Currency Symbol', 'Time Zone', 'Language');
@@ -473,6 +476,65 @@ export default function SettingsPage() {
               })()}
             </SectionCard>
 
+            <SectionCard title="POS Ordering Screen" description="The POS Ordering workflow is the entry point for every order." icon={Layout}>
+              {/* Part 10: POS Ordering is ALWAYS enabled — permanently on.
+                  There is intentionally no user-facing ON/OFF toggle. */}
+              <div className="flex items-center gap-3 p-4 rounded-2xl border-2 border-[#16A34A] bg-[#16A34A]/5">
+                <ShoppingCart className="w-5 h-5 text-[#16A34A] shrink-0" />
+                <div className="flex-1">
+                  <p className="text-xs font-extrabold text-slate-800 flex items-center gap-2">
+                    POS Ordering Screen
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-[#16A34A] text-white text-[8px] font-bold rounded-full uppercase">
+                      <Check className="w-2.5 h-2.5" /> Always enabled
+                    </span>
+                  </p>
+                  <p className="text-[10px] text-slate-500 mt-0.5">
+                    All orders can be created through the POS Ordering workflow.
+                  </p>
+                </div>
+              </div>
+              {/* Part 11: Barcode Scanner — plan entitlement is the upper limit.
+                  The card only appears when the plan includes barcode_scanner;
+                  the tenant ADMIN toggle then decides whether scanners are active. */}
+              {barcodeScannerAvailable ? (
+                <div className="mt-3">
+                  <ToggleSwitch checked={settings.barcodeScannerEnabled === true}
+                    onChange={(v) => handleFieldChange('barcodeScannerEnabled', v)}
+                    label="Enable Barcode Scanner"
+                    description="If ON: USB/Bluetooth barcode scanners can add sellable items to the bill in POS Ordering and Basic POS. Items without a barcode are still added manually." />
+                </div>
+              ) : (
+                <div className="mt-3 flex items-center gap-3 p-3 rounded-xl border border-slate-200 bg-slate-50">
+                  <ScanBarcode className="w-4 h-4 text-slate-400 shrink-0" />
+                  <div className="flex-1">
+                    <p className="text-[10px] font-bold text-slate-600">Barcode Scanner</p>
+                    <p className="text-[9px] text-slate-400 mt-0.5">Not included in your subscription plan. Contact your administrator to upgrade.</p>
+                  </div>
+                </div>
+              )}
+            </SectionCard>
+
+            <SectionCard title="Food Settings" description="Controls the maximum food type available in this restaurant. Individual staff may have a more restrictive setting." icon={Utensils}>
+              <div className="flex items-center justify-between gap-3 py-2">
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-bold text-slate-700">Dietary Menu Mode</p>
+                  <p className="text-[10px] text-slate-400 mt-0.5">Controls the maximum food type available in this restaurant. Individual staff may have a more restrictive setting.</p>
+                </div>
+                <div className="flex gap-1.5 shrink-0">
+                  {[['VEG_ONLY', 'Veg Only'], ['VEG_AND_NON_VEG', 'Veg + Non-Veg']].map(([value, label]) => (
+                    <button key={value} type="button" onClick={() => handleFieldChange('dietaryMode', value)}
+                      className={`px-3 h-8 rounded-lg border text-[10px] font-bold flex items-center gap-1 cursor-pointer transition-all ${
+                        (settings.dietaryMode || 'VEG_AND_NON_VEG') === value
+                          ? (value === 'VEG_ONLY' ? 'bg-emerald-50 border-emerald-400 text-emerald-700' : 'bg-red-50 border-red-400 text-red-700')
+                          : 'bg-slate-50 border-slate-200 text-slate-500 hover:bg-slate-100'
+                      }`}>
+                      {value === 'VEG_ONLY' ? <Leaf className="w-3 h-3" /> : <Beef className="w-3 h-3" />} {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </SectionCard>
+
             <SectionCard title="Module Visibility" description="Enable or disable entire modules. Disabled modules are hidden from the sidebar and blocked from all workflows." icon={Monitor}>
               {visibleModuleToggles.length === 0 ? (
                 <EmptyState icon={Monitor} title="No additional module settings" description="The selected business mode and your plan do not expose additional toggles here." />
@@ -527,7 +589,7 @@ export default function SettingsPage() {
                 <FormField label="Owner Name" value={settings.branding.ownerName || ''} onChange={(v) => handleFieldChange('ownerName', v, 'branding')} />
                 <FormField label="Email" type="email" value={settings.email} onChange={(v) => handleFieldChange('email', v)} />
                 <FormField label="Phone" value={settings.contactNumber} onChange={(v) => handleFieldChange('contactNumber', v)} />
-                <FormField label="GST Number" value={settings.gstNumber} onChange={(v) => handleFieldChange('gstNumber', v)} />
+                <FormField label="TAX Number" value={settings.gstNumber} onChange={(v) => handleFieldChange('gstNumber', v)} />
                 <FormField label="FSSAI Number" value={settings.fssaiNumber || ''} onChange={(v) => handleFieldChange('fssaiNumber', v)} />
                 <FormField label="Website" value={settings.website || ''} onChange={(v) => handleFieldChange('website', v)} />
               </FormGrid>

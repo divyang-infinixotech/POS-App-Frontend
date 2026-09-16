@@ -149,6 +149,12 @@ apiClient.interceptors.response.use(
       const pending = pendingRequests.get(key);
       if (pending) {
         pending.rejectPromise(processedError);
+        // The REAL error still reaches every caller through axios's own promise
+        // chain (handled by each caller's catch). The dedup promise itself has
+        // no consumer on the error path when the original caller is the only
+        // awaiter — observe its rejection so the browser never logs a spurious
+        // "Uncaught (in promise)" pageerror (e.g. expected 404 barcode misses).
+        pending.promise.catch(() => {});
         pendingRequests.delete(key);
       }
     }

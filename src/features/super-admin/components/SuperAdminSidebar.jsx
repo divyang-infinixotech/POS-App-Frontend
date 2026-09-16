@@ -11,6 +11,7 @@ import {
   Settings,
   Wallet,
   ClipboardList,
+  ClipboardCheck,
   UserCircle,
   LogOut,
   ChevronLeft,
@@ -20,6 +21,7 @@ import {
 
 const NAV_ITEMS = [
   { id: 'sa_dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { id: 'sa_applications', label: 'Applications', icon: ClipboardCheck },
   { id: 'sa_restaurants', label: 'Restaurants', icon: Building2 },
   { id: 'sa_subscriptions', label: 'Subscriptions', icon: CreditCard },
 

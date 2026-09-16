@@ -352,9 +352,10 @@ export default function RestaurantDetail({ restaurantId, onBack, onPlanChanged }
                         {doc.fileReference && (
                           <button
                             onClick={() => {
-                              const docUrl = doc.fileReference.startsWith('http')
-                                ? doc.fileReference
-                                : `${BACKEND_BASE_URL}/uploads/${doc.fileReference}`;
+                              // Documents are private — download through the
+                              // authorized SUPER_ADMIN endpoint (never public /uploads).
+                              const token = encodeURIComponent(localStorage.getItem('pos_token') || '');
+                              const docUrl = `${BACKEND_BASE_URL}/api/super-admin/restaurants/${restaurant.id}/documents/${doc.id}/download?token=${token}`;
                               window.open(docUrl, '_blank', 'noopener,noreferrer');
                             }}
                             className="p-1.5 hover:bg-slate-100 rounded-lg text-slate-400 cursor-pointer"

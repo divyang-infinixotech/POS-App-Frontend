@@ -15,11 +15,20 @@ import { orderApi } from '../../../../api/order.api';
 import { kotApi } from '../../../../api/kot.api';
 import { categoryApi } from '../../../../api/category.api';
 import { userApi } from '../../../../api/user.api';
-import { customerApi } from '../../../../api/customer.api';
 import { floorApi } from '../../../../api/floor.api';
 import { openKotPrintPreview } from '../../../../services/printService';
 import { PLACEHOLDER_IMAGE } from '../../../../lib/imagePlaceholder';
 import { canHandleBilling } from '../../../../utils/permissions';
+import {
+  SUBCATEGORY_ALL,
+  SUBCATEGORY_NONE,
+  subcategoryTabsFor,
+  filterMenuItems,
+} from '../../../../utils/menuHierarchy';
+import {
+  resolveAvailableOrderTypes,
+  resolveAccessibleFloors,
+} from '../../../../utils/orderFlow';
 
 const STEP_LABELS = ['Order Type', 'Floor', 'Table', 'Menu', 'Review'];
 
@@ -81,8 +90,26 @@ export default function TakeOrderWizard({ mode = 'modal' } = {}) {
   const currency = settings?.currencySymbol || '₹';
   const { user } = useAuthStore();
   const isServiceStaff = (user?.role || '').toUpperCase() === 'WAITER';
+  // Order-type assignment from the Staff Roster (authStore, /users/me/permissions):
+  // staffAssignedOrderTypes === null → unrestricted (all order types allowed);
+  // otherwise the list is the allowed set, so a Takeaway-assigned staff member is
+  // dropped straight into Takeaway with no floor/table step (backend enforces too).
+  const assignedOrderTypes = useAuthStore((s) => s.staffAssignedOrderTypes);
+  // Order-access model: Dine In is the default for ALL staff; the Takeaway
+  // grant (Staff Roster) ADDS takeaway. Exempt roles are unrestricted.
+  const isExemptRole = ['ADMIN', 'SUPER_ADMIN', 'MANAGER'].includes(String(user?.role || '').toUpperCase());
+  const takeawayGranted = isExemptRole || (Array.isArray(assignedOrderTypes) && assignedOrderTypes.includes('TAKEAWAY'));
+  // Grant state from /users/me/permissions has loaded for this staff member
+  // (exempt roles resolve immediately; staff resolve to [] or ['TAKEAWAY']).
+  const grantLoaded = !!user && (isExemptRole || Array.isArray(assignedOrderTypes));
   // Save & Pay opens the payment overlay — restricted to billing-capable roles
   const canBill = canHandleBilling(user?.role);
+  // Barcode scanner entitlement (Part 11): active only when the plan includes
+  // the feature AND the restaurant toggle is ON. `barcodeScannerAvailable`
+  // starts false until the settings store resolves the subscription snapshot —
+  // the scanner UI simply stays hidden until entitlement is confirmed.
+  const barcodeAvailable = useSettingsStore((s) => s.barcodeScannerAvailable === true);
+  const canScanBarcode = barcodeAvailable && useSettingsStore((s) => s.settings?.barcodeScannerEnabled === true);
 
   // ── Step State ──
   const [currentStep, setCurrentStep] = useState(0);
@@ -103,6 +130,9 @@ export default function TakeOrderWizard({ mode = 'modal' } = {}) {
   const [floors, setFloors] = useState([]);
   const [floorLoading, setFloorLoading] = useState(false);
   const [selectedFloor, setSelectedFloor] = useState(null);
+  // True when the backend reports this user is floor-restricted (assigned
+  // floors only). Drives auto-selection and the "no floor assigned" state.
+  const [floorsRestricted, setFloorsRestricted] = useState(false);
 
   // ── Step 3: Table ──
   const [tables, setTables] = useState([]);
@@ -110,28 +140,56 @@ export default function TakeOrderWizard({ mode = 'modal' } = {}) {
   const [tableLoading, setTableLoading] = useState(false);
 
   // ── Waiter ──
-  const [waiters, setWaiters] = useState([]);
-  const [selectedWaiter, setSelectedWaiter] = useState(null);
+  // Service Staff is NO LONGER selectable: the backend attributes the order to
+  // the authenticated user (JWT → order.userId). `waiterName` only feeds the
+  // KOT print preview with the logged-in user's display name.
   const [waiterLoading, setWaiterLoading] = useState(false);
-  const [waiterError, setWaiterError] = useState(false);
+  const waiterName = user?.name || '';
 
   // ── Customer ──
-  const [customers, setCustomers] = useState([]);
-  const [customerError, setCustomerError] = useState(false);
-  const [showCustomerSearch, setShowCustomerSearch] = useState(false);
-  const [customerSearch, setCustomerSearch] = useState('');
-  const [selectedCustomer, setSelectedCustomer] = useState(null);
+  // Customer is no longer part of the New Order flow (backend falls back to
+  // the Walk-in customer). No selection UI is rendered; legacy state vars are
+  // kept minimal for edit-existing-order rendering paths.
   const [customerName, setCustomerName] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
 
   // ── Step 4: Menu ──
   const [menuItems, setMenuItems] = useState([]);
   const [categories, setCategories] = useState([]);
+  const [subcategories, setSubcategories] = useState([]); // loaded once with the menu (Part 2 req. 2)
   const [selectedCat, setSelectedCat] = useState('All');
+  const [selectedSubcat, setSelectedSubcat] = useState(SUBCATEGORY_ALL); // 'All' | 'NONE' | subcategory id
   const [searchQuery, setSearchQuery] = useState('');
   const [cart, setCart] = useState([]);
   const [notesForItem, setNotesForItem] = useState(null);
   const [notesText, setNotesText] = useState('');
+
+  // ── Edit Mode ──
+  // NOTE: declared BEFORE any effect that references `isEditing` — dependency
+  // arrays are evaluated during render, so a later `const` would be a TDZ
+  // ReferenceError ("Cannot access 'isEditing' before initialization").
+  const [editingOrder, setEditingOrder] = useState(null);
+  const [editExistingItems, setEditExistingItems] = useState([]);
+
+  // ── Guest Count ──
+  const [guestCount, setGuestCount] = useState(2);
+
+  // ── Is editing existing order? ──
+  // NOTE: declared BEFORE any effect that references `isEditing` — dependency
+  // arrays are evaluated during render, so a later `const` would be a TDZ
+  // ReferenceError ("Cannot access 'isEditing' before initialization").
+  const isEditing = !!activeOrderTakingId && !!editingOrder;
+
+  // ── Shared order-type resolution (Part 8) ──
+  // Order type must be resolved BEFORE unnecessary steps render — no component
+  // that depends on floor/table state mounts while orderType is still unknown.
+  const skipFloorMgmtResolved = settings.enableFloorManagement === false;
+  const orderTypeResolution = resolveAvailableOrderTypes({
+    role: user?.role,
+    assignedOrderTypes,
+    grantLoaded,
+    floorManagementOff: skipFloorMgmtResolved,
+  });
 
   // ── Clear floor/table when switching to Take Away ──
   useEffect(() => {
@@ -148,39 +206,57 @@ export default function TakeOrderWizard({ mode = 'modal' } = {}) {
     }
   }, [isServiceStaff, orderType]);
 
-  // ── Edit Mode ──
-  const [editingOrder, setEditingOrder] = useState(null);
-  const [editExistingItems, setEditExistingItems] = useState([]);
-
-  // ── Guest Count ──
-  const [guestCount, setGuestCount] = useState(2);
-
-  // ── Is editing existing order? ──
-  const isEditing = !!activeOrderTakingId && !!editingOrder;
-
   // ── Load Data ──
   const [dataLoading, setDataLoading] = useState(false);
 
   const isPageMode = mode === 'page';
 
-  // ── Takeaway-only fast path ──
-  // When Floor Management is OFF there is exactly one order type (Take Away), so
-  // skip the single-option Order Type step and drop the cashier straight onto
-  // the Menu step — no pointless extra tap. Only applies to NEW orders; the
-  // edit flow positions its own step in loadInitialData().
+  // ── Dine-In-only staff: skip the Order Type step entirely ──
+  // Part 8 (Cases A/B): when resolution yields exactly ONE type and no forced
+  // selection yet, auto-set it and jump straight to the floor step (dine-in)
+  // or menu (takeaway). Edit mode excluded. The resolution is computed before
+  // any effect referencing it (no TDZ) and `isEditing` is already declared above.
   useEffect(() => {
     if (
-      (isPageMode || showTakeOrderWizard) &&
-      settings.enableFloorManagement === false &&
       !isEditing &&
+      grantLoaded &&
       !dataLoading &&
+      orderTypeResolution.showSelection === false &&
+      orderTypeResolution.forcedType &&
       currentStep === 0 &&
       orderType === null
     ) {
-      setOrderType('takeaway');
-      setCurrentStep(1);
+      const forced = orderTypeResolution.forcedType;
+      setOrderType(forced);
+      // Takeaway skips floor/table entirely (Part 8 Case B).
+      if (forced === 'takeaway') {
+        setCurrentStep(1);
+      } else {
+        setCurrentStep(settings.enableFloorManagement === false ? 3 : 1);
+      }
     }
-  }, [isPageMode, showTakeOrderWizard, settings.enableFloorManagement, isEditing, dataLoading, currentStep, orderType]);
+  }, [isEditing, grantLoaded, dataLoading, orderTypeResolution.showSelection, orderTypeResolution.forcedType, currentStep, orderType, settings.enableFloorManagement]);
+
+  // ── Auto-select the single assigned floor (Part 7 req. 1/6) ──
+  // Exactly one permitted floor + dine-in + no selection yet → skip the floor
+  // screen and land directly on that floor's tables. Multi-floor and zero-floor
+  // cases stay interactive (zero → configuration message). The backend still
+  // authorizes every floor/table operation (frontend is convenience only).
+  useEffect(() => {
+    if (
+      orderType === 'dine_in' &&
+      !floorLoading &&
+      !selectedFloor &&
+      currentStep === 1 &&
+      !isEditing
+    ) {
+      const { autoSelectedFloor, hasAccess } = resolveAccessibleFloors(floors, floorsRestricted);
+      if (hasAccess && autoSelectedFloor) {
+        setSelectedFloor(autoSelectedFloor);
+        setCurrentStep(2);
+      }
+    }
+  }, [orderType, floorLoading, selectedFloor, currentStep, isEditing, floors, floorsRestricted]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -202,10 +278,11 @@ export default function TakeOrderWizard({ mode = 'modal' } = {}) {
       await Promise.allSettled([
         loadMenu(),
         loadCategories(),
+        loadSubcategories(), // once per wizard open — tabs derive locally, no refetch per click (Part 2 req. 2)
         loadTables(),
         loadFloors(),
-        loadWaiters(),
-        loadCustomers(),
+        // Waiter/customer lists no longer loaded: no selection UI exists in
+        // the New Order flow (staff = logged-in user, customer = Walk-in).
       ]);
       // If editing existing order, load it and pre-populate
       if (activeOrderTakingId) {
@@ -248,11 +325,7 @@ export default function TakeOrderWizard({ mode = 'modal' } = {}) {
               notes: oi.notes || ''
             }));
             setEditExistingItems(existingItems);
-            // Pre-populate waiter if available
-            if (orderData.user) {
-              const matchedWaiter = waiters.find(w => w.id === orderData.user.id);
-              if (matchedWaiter) setSelectedWaiter(matchedWaiter);
-            }
+            // Waiter pre-population removed — attribution is server-side now.
             // Skip to Menu step (step 3 = Menu for dine-in, step 1 = Menu for takeaway)
             setCurrentStep(resolvedOrderType === 'takeaway' ? 1 : 3);
           }
@@ -274,15 +347,12 @@ export default function TakeOrderWizard({ mode = 'modal' } = {}) {
     setSelectedFloor(null);
     setSelectedTable(null);
     setSelectedCat('All');
+    setSelectedSubcat(SUBCATEGORY_ALL);
     setSearchQuery('');
     setCart([]);
     setGuestCount(2);
-    setSelectedWaiter(null);
-    setSelectedCustomer(null);
     setCustomerName('');
     setCustomerPhone('');
-    setWaiterError(false);
-    setCustomerError(false);
     setSubmitting(null);
     setActionSuccess(null);
     setConfirmDialog(null);
@@ -297,10 +367,14 @@ export default function TakeOrderWizard({ mode = 'modal' } = {}) {
         name: m.name,
         price: Number(m.price),
         category: m.category?.name || 'Main Course',
+        subcategoryId: m.subcategoryId || null,
+        subcategoryName: m.subcategory?.name || null,
+        barcode: m.barcode || '',
         description: m.description || '',
         image: m.image || '',
         isLive: m.isAvailable !== false,
         isVeg: m.isVeg !== false,
+        dietaryType: m.dietaryType || (m.isVeg !== false ? 'VEG' : 'NON_VEG'),
         stockStatus: m.isAvailable === false ? 'Out of Stock' : 'Available',
         prepTime: m.preparationTime || 15,
       }));
@@ -320,6 +394,23 @@ export default function TakeOrderWizard({ mode = 'modal' } = {}) {
       setCategories(cats);
     } catch (e) {
       console.error('Failed to load categories:', e);
+    }
+  };
+
+  const loadSubcategories = async () => {
+    try {
+      const resp = await menuApi.getSubcategories();
+      const subs = (resp?.data?.subcategories || resp?.subcategories || []).map((s) => ({
+        id: s.id,
+        name: s.name,
+        categoryId: s.categoryId,
+        categoryName: s.category?.name || '',
+        isActive: s.isActive !== false,
+        sortOrder: s.sortOrder || 0,
+      }));
+      setSubcategories(subs);
+    } catch (e) {
+      console.error('Failed to load subcategories:', e);
     }
   };
 
@@ -345,73 +436,27 @@ export default function TakeOrderWizard({ mode = 'modal' } = {}) {
     }
   };
 
-  const loadWaiters = async () => {
-    setWaiterLoading(true);
-    try {
-      // Dedicated waiter directory — works for every order-placing role,
-      // unlike GET /users which is staff-management only (403 for cashiers).
-      const resp = await userApi.getWaiters();
-      const waiters = Array.isArray(resp?.data?.users)
-        ? resp.data.users
-        : Array.isArray(resp?.data)
-          ? resp.data
-          : Array.isArray(resp?.users)
-            ? resp.users
-            : [];
-      const mapped = waiters.map((u) => ({
-        id: u.id,
-        name: u.name || 'Staff',
-        role: u.role || '',
-      }));
-      setWaiters(mapped);
-      setWaiterError(false);
-    } catch (e) {
-      // Scoped failure: the rest of the wizard keeps working; the Service Staff
-      // selector shows an inline retry instead of blocking the order.
-      setWaiters([]);
-      setWaiterError(true);
-      console.warn('Failed to load waiters:', e);
-    } finally {
-      setWaiterLoading(false);
-    }
-  };
-
   const loadFloors = async () => {
     setFloorLoading(true);
     try {
-      const resp = await floorApi.getAll();
-      if (resp.floors?.length) {
-        const mapped = resp.floors.map((f) => ({
-          id: `floor-${f.id}`,
-          name: f.name,
-        }));
-        setFloors(mapped);
-      } else {
-        setFloors([]);
-      }
+      // GET /users/me/floors — server-scoped: restricted staff receive only
+      // their assigned floors (restricted=true); ADMIN/MANAGER receive all.
+      // Backend still enforces per-request, this only shapes the UI.
+      const resp = await userApi.getMyFloors();
+      const list = resp?.floors || resp?.data?.floors || [];
+      const restricted = !!(resp?.restricted ?? resp?.data?.restricted);
+      setFloorsRestricted(restricted);
+      const mapped = (list || []).map((f) => ({
+        id: `floor-${f.id}`,
+        name: f.name,
+      }));
+      setFloors(mapped);
     } catch (e) {
       console.error('Failed to load floors:', e);
       setFloors([]);
+      setFloorsRestricted(false);
     } finally {
       setFloorLoading(false);
-    }
-  };
-
-  const loadCustomers = async () => {
-    try {
-      const resp = await customerApi.getAll();
-      const mapped = (resp.data || resp.customers || []).map((c) => ({
-        id: `cust-${c.id}`,
-        name: c.name,
-        phone: c.phone || '',
-      }));
-      setCustomers(mapped);
-      setCustomerError(false);
-    } catch (e) {
-      // Customer API is optional — gracefully show empty list on failure.
-      // Scoped, non-blocking: the customer search shows an inline retry.
-      setCustomers([]);
-      setCustomerError(true);
     }
   };
 
@@ -423,6 +468,42 @@ export default function TakeOrderWizard({ mode = 'modal' } = {}) {
       return [...prev, { itemId: item.id, name: item.name, price: item.price, qty: 1, notes: '' }];
     });
   }, []);
+
+  // ── Barcode scanning (Part 11) ──
+  // USB/Bluetooth HID scanners type the code + Enter into a focused input.
+  // The resolved item is added via the SAME addToCart used by card taps —
+  // no second billing/cart engine. Unknown codes surface a visible error and
+  // the input refocuses for the next scan.
+  const scannerInputRef = useRef(null);
+  const handleBarcodeScan = async (rawCode) => {
+    const code = String(rawCode || '').trim();
+    if (!code) return;
+    try {
+      const resp = await menuApi.getByBarcode(code);
+      const item = resp?.item || resp?.data?.item;
+      if (!item) {
+        addToast(`Item not found for barcode: ${code}`, 'error');
+        return;
+      }
+      addToCart({
+        id: `menu-${item.id}`,
+        name: item.name,
+        price: Number(item.price),
+      });
+    } catch (e) {
+      const status = e?.response?.status;
+      if (status === 404) {
+        addToast(`Item not found for barcode: ${code}`, 'error');
+      } else if (status === 403) {
+        addToast(e?.response?.data?.message || 'Barcode scanner is not enabled for this restaurant.', 'error');
+      } else {
+        addToast(e?.message || 'Barcode lookup failed', 'error');
+      }
+    } finally {
+      // Refocus for the next scan — no manual click needed (Part 11 req.).
+      requestAnimationFrame(() => scannerInputRef.current?.focus());
+    }
+  };
 
   const updateCartQty = useCallback((itemId, delta) => {
     setCart(prev => prev.map(c => c.itemId === itemId ? { ...c, qty: Math.max(0, c.qty + delta) } : c).filter(c => c.qty > 0));
@@ -473,10 +554,10 @@ export default function TakeOrderWizard({ mode = 'modal' } = {}) {
 
     return {
       tableId: selectedTable ? getBackendId(selectedTable.id, 't-') : undefined,
-      customerId: selectedCustomer ? getBackendId(selectedCustomer.id, 'cust-') : undefined,
+      // customerId intentionally omitted — customer selection is out of the
+      // New Order flow; the backend applies its Walk-in fallback.
       orderType: backendOrderType,
       items: itemsPayload,
-      notes: selectedWaiter ? `Waiter: ${selectedWaiter.name}` : undefined,
     };
   };
 
@@ -505,7 +586,7 @@ export default function TakeOrderWizard({ mode = 'modal' } = {}) {
           tableName: selectedTable?.name || 'Takeaway',
           guestsCount: guestCount,
           timestamp: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
-          serverName: selectedWaiter?.name || 'Staff',
+          serverName: waiterName || 'Staff',
           status: 'HOLD',
           items: cart.map(c => ({ itemId: c.itemId, name: c.name, price: c.price, quantity: c.qty, status: 'Pending', notes: c.notes })),
           orderType: orderType === 'dine_in' ? 'Dine In' : 'Takeaway',
@@ -569,7 +650,7 @@ export default function TakeOrderWizard({ mode = 'modal' } = {}) {
           orderNo: orderData.orderNo || String(orderData.id),
           tableNo: selectedTable?.name || '',
           orderType: orderType === 'dine_in' ? 'DINE_IN' : 'TAKEAWAY',
-          waiterName: selectedWaiter?.name || '',
+          waiterName: waiterName || '',
           customerName: customerName || '',
           customerPhone: customerPhone || '',
           guestCount: guestCount || 1,
@@ -590,7 +671,7 @@ export default function TakeOrderWizard({ mode = 'modal' } = {}) {
         tableName: selectedTable?.name || 'Takeaway',
         guestsCount: guestCount,
         timestamp: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
-        serverName: selectedWaiter?.name || 'Staff',
+        serverName: waiterName || 'Staff',
         status: 'PREP',
         items: cart.map(c => ({ itemId: c.itemId, name: c.name, price: c.price, quantity: c.qty, status: 'Pending', notes: c.notes })),
         orderType: orderType === 'dine_in' ? 'Dine In' : 'Takeaway',
@@ -642,7 +723,7 @@ export default function TakeOrderWizard({ mode = 'modal' } = {}) {
           tableName: selectedTable?.name || 'Takeaway',
           guestsCount: guestCount,
           timestamp: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
-          serverName: selectedWaiter?.name || 'Staff',
+          serverName: waiterName || 'Staff',
           status: 'PREP',
           items: cart.map(c => ({ itemId: c.itemId, name: c.name, price: c.price, quantity: c.qty, status: 'Pending', notes: c.notes })),
           orderType: orderType === 'dine_in' ? 'Dine In' : 'Takeaway',
@@ -788,12 +869,39 @@ export default function TakeOrderWizard({ mode = 'modal' } = {}) {
   const goBack = () => { if (currentStep > 0) setCurrentStep(s => s - 1); };
 
   // ── Filtered Data ──
-  const filteredItems = menuItems.filter(item => {
-    if (!item.isLive) return false;
-    const matchesCat = selectedCat === 'All' || item.category === selectedCat;
-    const matchesSearch = !searchQuery || item.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      item.category.toLowerCase().includes(searchQuery.toLowerCase());
-    return matchesCat && matchesSearch;
+  // Part 11: a category holding zero visible items (e.g. all non-veg hidden
+  // for a VEG_ONLY user) must not render as an empty chip — categories are
+  // derived from the VISIBLE items and a stale selection falls back to All.
+  const visibleCategories = new Set(menuItems.map((m) => m.category));
+  useEffect(() => {
+    if (selectedCat !== 'All' && !visibleCategories.has(selectedCat)) {
+      setSelectedCat('All');
+      setSelectedSubcat(SUBCATEGORY_ALL);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedCat, menuItems]);
+
+  // Changing category MUST reset the subcategory to All (Part 2 req. 3).
+  const handleWizardCategorySelect = (catName) => {
+    setSelectedCat(catName);
+    setSelectedSubcat(SUBCATEGORY_ALL);
+  };
+
+  // Subcategory tabs for the selected category — derived from already-loaded
+  // data, no refetch on tab clicks. Only rendered for a specific category.
+  const wizardSubcatTabs = selectedCat === 'All'
+    ? []
+    : subcategoryTabsFor(menuItems, subcategories, selectedCat);
+
+  // Shared hierarchy filter (Part 2/9): category → subcategory → search.
+  // NOTE: the inline barcode input was removed from the wizard — with the
+  // scanner ON the Basic POS workspace owns the dedicated Counter Scan
+  // screen (spec §8/§13: never show both interfaces at once).
+  const filteredItems = filterMenuItems(menuItems, {
+    selectedCategory: selectedCat,
+    selectedSubcategory: selectedSubcat,
+    searchQuery,
+    dietaryFilter: 'All', // dietary restrictions already filtered server-side (dietaryMenuWhere)
   });
 
   const filteredTables = tables.filter(t => {
@@ -849,12 +957,10 @@ export default function TakeOrderWizard({ mode = 'modal' } = {}) {
   );
 
   // ── Render: Step 0 - Order Type ──
-  // When Floor Management is OFF, only Take Away / Basic POS ordering is allowed.
-  const availableOrderTypes = isServiceStaff
-    ? ORDER_TYPE_OPTIONS.filter(opt => opt.value === 'dine_in')
-    : skipFloorMgmt
-      ? ORDER_TYPE_OPTIONS.filter(opt => opt.value === 'takeaway')
-      : ORDER_TYPE_OPTIONS;
+  // Options come from the shared resolver (Part 8): exempt roles see both,
+  // granted staff see both, dine-in-only staff never reach this step.
+  // When Floor Management is OFF only Take Away / Basic POS ordering is shown.
+  const availableOrderTypes = ORDER_TYPE_OPTIONS.filter(opt => orderTypeResolution.types.includes(opt.value));
 
   const renderOrderType = () => (
     <div className="flex-1 flex flex-col items-center justify-center px-4 py-4 sm:px-8">
@@ -893,6 +999,14 @@ export default function TakeOrderWizard({ mode = 'modal' } = {}) {
       <p className="text-[10px] text-slate-400 mb-4">Choose the floor where the customer is seated</p>
       {floorLoading ? (
         <div className="flex items-center justify-center py-16 text-slate-400 text-xs"><Loader2 className="w-4 h-4 animate-spin mr-2" />Loading floors...</div>
+      ) : floors.length === 0 && floorsRestricted ? (
+        // Zero assigned floors for a restricted user — never fall back to all
+        // floors; say so clearly (backend also blocks unauthorized floors).
+        <div className="flex flex-col items-center justify-center py-12 text-center">
+          <Building2 className="w-10 h-10 text-slate-300 mb-3" />
+          <p className="text-sm font-bold text-slate-600 mb-1">No floor has been assigned to your account.</p>
+          <p className="text-[10px] text-slate-400 mb-4">Ask your manager to assign you a floor in Staff Roster → Assign Access.</p>
+        </div>
       ) : floors.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-12 text-center">
           <Building2 className="w-10 h-10 text-slate-300 mb-3" />
@@ -982,76 +1096,18 @@ export default function TakeOrderWizard({ mode = 'modal' } = {}) {
           </button>
         </div>
       </div>
-      {/* Waiter Selection */}
-      <div className="mt-3 p-3.5 bg-white rounded-xl border border-slate-200">
-        <div className="flex items-center justify-between mb-2">
-          <span className="text-xs font-bold text-slate-600 flex items-center gap-1.5">
-            <ChefHat className="w-3.5 h-3.5 text-[#C85A32]" /> Service Staff
-          </span>
-          {selectedWaiter && (
-            <button onClick={() => setSelectedWaiter(null)} className="text-[9px] text-red-500 font-bold hover:underline cursor-pointer">Clear</button>
-          )}
-        </div>
-        {waiterLoading ? (
-          <div className="text-[10px] text-slate-400 italic">Loading staff...</div>
-        ) : waiterError && waiters.length === 0 ? (
-          <div className="flex items-center justify-between gap-2 bg-red-50 border border-red-100 rounded-lg px-2.5 py-1.5">
-            <span className="text-[10px] text-red-500 italic">Staff list unavailable.</span>
-            <button onClick={loadWaiters} className="text-[9px] font-bold text-blue-600 hover:underline cursor-pointer">Retry</button>
-          </div>
-        ) : waiters.length === 0 ? (
-          <div className="text-[10px] text-slate-400 italic">No service staff found.</div>
-        ) : (
-          <div className="flex flex-wrap gap-1.5">
-            {waiters.map(w => (
-              <button key={w.id} onClick={() => setSelectedWaiter(w)}
-                className={`px-3 py-1.5 rounded-lg text-[10px] font-bold border transition-all cursor-pointer ${
-                  selectedWaiter?.id === w.id
-                    ? 'bg-[#C85A32] text-white border-[#C85A32]'
-                    : 'bg-white text-slate-600 border-slate-200 hover:border-[#C85A32]'
-                }`}>{w.name}</button>
-            ))}
-          </div>
-        )}
-      </div>
-      {/* Customer Selection */}
-      <div className="mt-3 p-3.5 bg-white rounded-xl border border-slate-200">
-        <div className="flex items-center justify-between mb-2">
-          <span className="text-xs font-bold text-slate-600 flex items-center gap-1.5">
-            <User className="w-3.5 h-3.5 text-blue-500" /> Customer
-          </span>
-          <button onClick={() => setShowCustomerSearch(true)} className="text-[9px] text-blue-600 font-bold hover:underline flex items-center gap-1 cursor-pointer">
-            <UserPlus className="w-3 h-3" /> {selectedCustomer ? 'Change' : 'Add Customer'}
-          </button>
-        </div>
-        {selectedCustomer ? (
-          <div className="flex items-center gap-2 p-2 bg-blue-50 rounded-lg border border-blue-100">
-            <User className="w-4 h-4 text-blue-500" />
-            <div>
-              <p className="text-[11px] font-bold text-slate-800">{selectedCustomer.name}</p>
-              {selectedCustomer.phone && <p className="text-[9px] text-slate-500">{selectedCustomer.phone}</p>}
-            </div>
-          </div>
-        ) : customerName ? (
-          <div className="flex items-center gap-2 p-2 bg-blue-50 rounded-lg border border-blue-100">
-            <User className="w-4 h-4 text-blue-500" />
-            <p className="text-[11px] font-bold text-slate-800">{customerName}{customerPhone ? ` (${customerPhone})` : ''}</p>
-          </div>
-        ) : (
-          <div className="flex items-center gap-2">
-            <input value={customerName} onChange={e => setCustomerName(e.target.value)} placeholder="Customer name (optional)"
-              className="flex-1 h-8 px-2 bg-slate-50 border border-slate-200 rounded-lg text-[10px] outline-none focus:border-blue-400" />
-            <input value={customerPhone} onChange={e => setCustomerPhone(e.target.value)} placeholder="Phone"
-              className="w-28 h-8 px-2 bg-slate-50 border border-slate-200 rounded-lg text-[10px] outline-none focus:border-blue-400 font-mono" />
-          </div>
-        )}
-      </div>
+      {/* Service Staff + Customer selection REMOVED: the order is attributed to
+          the logged-in user server-side (order.userId from the JWT) and the
+          customer defaults to Walk-in. Nothing to pick here anymore. */}
     </div>
   );
 
   // ── Menu Step (Shared) ──
   const renderMenu = () => (
     <div className="flex-1 flex flex-col overflow-hidden">
+      {/* Inline barcode input removed (spec §13): the wizard never shows a
+          scanner interface. With the scanner ON, the Basic POS workspace's
+          dedicated Counter Scan screen is the single scanning UI. */}
       {/* Search bar */}
       <div className="px-3 pt-3 pb-2 shrink-0">
         <div className="relative">
@@ -1065,7 +1121,7 @@ export default function TakeOrderWizard({ mode = 'modal' } = {}) {
       {/* Horizontal category selector — matching POS Ordering style */}
       <div className="shrink-0 border-b border-slate-100 bg-white">
         <div className="flex gap-1.5 overflow-x-auto px-3 py-2 no-scrollbar">
-          <button onClick={() => setSelectedCat('All')}
+          <button onClick={() => handleWizardCategorySelect('All')}
             className={`shrink-0 h-10 px-4 text-[11px] font-bold rounded-xl transition-all cursor-pointer flex items-center gap-1.5 ${
               selectedCat === 'All'
                 ? 'bg-[#16A34A] text-white shadow-xs'
@@ -1074,13 +1130,13 @@ export default function TakeOrderWizard({ mode = 'modal' } = {}) {
             <LayoutGrid className="w-3.5 h-3.5" />
             All
             <span className={`text-[9px] px-1.5 py-0.5 rounded-full ml-0.5 ${selectedCat === 'All' ? 'bg-white/20' : 'bg-slate-200 text-slate-500'}`}>
-              {filteredItems.length}
+              {menuItems.length}
             </span>
           </button>
-          {categories.map(cat => {
+          {categories.filter(cat => visibleCategories.has(cat.name)).map(cat => {
             const catCount = menuItems.filter(i => i.category === cat.name).length;
             return (
-              <button key={cat.id} onClick={() => setSelectedCat(cat.name)}
+              <button key={cat.id} onClick={() => handleWizardCategorySelect(cat.name)}
                 className={`shrink-0 h-10 px-4 text-[11px] font-bold rounded-xl transition-all cursor-pointer whitespace-nowrap ${
                   selectedCat === cat.name
                     ? 'text-white shadow-xs'
@@ -1096,6 +1152,33 @@ export default function TakeOrderWizard({ mode = 'modal' } = {}) {
           })}
         </div>
       </div>
+
+      {/* LEVEL 2 — Subcategory tab row for the selected category (Part 2 req. 1-4):
+          Category → Subcategory → Items. Category change resets this to All. */}
+      {selectedCat !== 'All' && wizardSubcatTabs.length > 0 && (
+        <div className="shrink-0 border-b border-slate-100 bg-white">
+          <div className="flex gap-1.5 overflow-x-auto px-3 py-2 no-scrollbar">
+            <button onClick={() => setSelectedSubcat(SUBCATEGORY_ALL)}
+              className={`shrink-0 h-8 px-3 text-[10px] font-bold rounded-lg transition-all cursor-pointer whitespace-nowrap ${
+                selectedSubcat === SUBCATEGORY_ALL
+                  ? 'bg-slate-800 text-white shadow-xs'
+                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+              }`}>
+              All
+            </button>
+            {wizardSubcatTabs.map(tab => (
+              <button key={tab.id} onClick={() => setSelectedSubcat(tab.id)}
+                className={`shrink-0 h-8 px-3 text-[10px] font-bold rounded-lg transition-all cursor-pointer whitespace-nowrap ${
+                  selectedSubcat === tab.id
+                    ? 'bg-slate-800 text-white shadow-xs'
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                }`}>
+                {tab.name} ({tab.count})
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Items grid — large POS-style cards */}
       <div className="flex-1 overflow-y-auto p-3">
@@ -1206,7 +1289,7 @@ export default function TakeOrderWizard({ mode = 'modal' } = {}) {
         <h3 className="text-sm font-extrabold text-slate-800">Review Order</h3>
         <p className="text-[10px] text-slate-400">
           {isTakeaway ? 'Take Away' : `Table: ${selectedTable?.name || '-'} · ${guestCount} guest(s)`} · {cart.reduce((s, c) => s + c.qty, 0)} items
-          {!isTakeaway && selectedWaiter ? ` · Service Staff: ${selectedWaiter.name}` : ''}
+          {!isTakeaway && waiterName ? ` · Service Staff: ${waiterName}` : ''}
         </p>
 
         {/* Order Info Cards */}
@@ -1488,60 +1571,11 @@ export default function TakeOrderWizard({ mode = 'modal' } = {}) {
         </div>
       )}
 
-      {/* Customer Search Modal */}
-      {showCustomerSearch && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/30 backdrop-blur-xs">
-          <div className="bg-white w-full max-w-md rounded-xl shadow-xl border border-slate-100 p-4 space-y-3 animate-fade-in">
-            <h4 className="text-xs font-extrabold text-slate-800">Find or Add Customer</h4>
-            <input value={customerSearch} onChange={(e) => setCustomerSearch(e.target.value)}
-              placeholder="Search customers by name or phone..."
-              className="w-full h-9 px-2 bg-slate-50 border border-slate-200 rounded-lg text-xs outline-none focus:border-blue-400" autoFocus />
-            {customerError && (
-              <div className="flex items-center justify-between gap-2 bg-red-50 border border-red-100 rounded-lg px-2.5 py-1.5 mb-2">
-                <span className="text-[10px] text-red-500 italic">Couldn't load customer list.</span>
-                <button onClick={loadCustomers} className="text-[9px] font-bold text-blue-600 hover:underline cursor-pointer">Retry</button>
-              </div>
-            )}
-            <div className="max-h-40 overflow-y-auto space-y-1">
-              {customers.filter(c => c.name.toLowerCase().includes(customerSearch.toLowerCase()) || c.phone.includes(customerSearch)).map(c => (
-                <button key={c.id} onClick={() => { setSelectedCustomer(c); setShowCustomerSearch(false); setCustomerSearch(''); }}
-                  className="w-full p-2 flex items-center gap-2 hover:bg-blue-50 rounded-lg transition-all text-left cursor-pointer">
-                  <User className="w-4 h-4 text-slate-400" />
-                  <div>
-                    <p className="text-xs font-bold text-slate-800">{c.name}</p>
-                    {c.phone && <p className="text-[9px] text-slate-500">{c.phone}</p>}
-                  </div>
-                </button>
-              ))}
-              {customerSearch && !customers.find(c => c.name.toLowerCase().includes(customerSearch.toLowerCase())) && (
-                <p className="text-[10px] text-slate-400 italic text-center py-2">No matching customers found. Enter name below.</p>
-              )}
-            </div>
-            <div className="flex gap-2 pt-2 border-t border-slate-100">
-              <button onClick={() => setShowCustomerSearch(false)}
-                className="flex-1 h-8 border border-slate-200 rounded-lg text-[10px] font-bold text-slate-500 hover:bg-slate-50 cursor-pointer">Close</button>
-              <button onClick={() => {
-                // Use manually entered name/phone
-                if (customerSearch) {
-                  const parts = customerSearch.split(' ');
-                  setCustomerName(parts[0]);
-                  if (parts.length > 1) setCustomerPhone(parts.slice(1).join(' '));
-                }
-                setShowCustomerSearch(false);
-              }} className="flex-[2] h-8 bg-blue-600 text-white rounded-lg text-[10px] font-bold hover:bg-blue-700 cursor-pointer">
-                Add as New
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Confirm Dialog */}
       <ConfirmDialog
         open={confirmDialog !== null && !confirmDialog?.children}
         title={confirmDialog?.title}
         message={confirmDialog?.message}
-        confirmLabel={confirmDialog?.confirmLabel}
         confirmVariant={confirmDialog?.confirmVariant}
         onConfirm={confirmDialog?.onConfirm || (() => {})}
         onCancel={confirmDialog?.onCancel || (() => {})}

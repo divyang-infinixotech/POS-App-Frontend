@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Search, Plus, Minus, ShoppingCart, Trash, X, User, Phone, CreditCard,
   ArrowLeft, ChevronLeft, Package, LayoutGrid, UtensilsCrossed,
+  ScanBarcode, AlertTriangle, ScanLine,
 } from 'lucide-react';
 import { useCartStore, useUiStore, useSettingsStore, useAuthStore } from '../../../../store';
 import { menuApi } from '../../../../api/menu.api';
@@ -10,6 +11,9 @@ import { orderApi } from '../../../../api/order.api';
 import { useSocketEvent } from '../../../../hooks/useSocket';
 import { PLACEHOLDER_IMAGE } from '../../../../lib/imagePlaceholder';
 import { canHandleBilling } from '../../../../utils/permissions';
+// Shared Category → Subcategory → Item hierarchy (Parts 2/9) — the SAME rule set
+// as the Menu Manager and the full POS wizard; no second filtering system.
+import { filterMenuItems, subcategoryTabsFor, SUBCATEGORY_ALL } from '../../../../utils/menuHierarchy';
 
 const ICON_MAP = {
   utensils: '🍽️', pizza: '🍕', hamburger: '🍔', coffee: '☕',
@@ -36,6 +40,8 @@ export default function PosWorkspace() {
   // view 'items'     = items belonging to the selected category
   const [view, setView] = useState('categories');
   const [selectedCategory, setSelectedCategory] = useState(null); // null = show categories view, then first cat
+  const [selectedSubcategory, setSelectedSubcategory] = useState(SUBCATEGORY_ALL); // 'All' | 'NONE' | String(id)
+  const [subcategories, setSubcategories] = useState([]); // loaded ONCE, reused across tab clicks (Part 1 req. 14)
   const [searchQuery, setSearchQuery] = useState('');
 
   // ── Cart / order state ──
@@ -53,6 +59,67 @@ export default function PosWorkspace() {
 
   // Counter sale mode flag
   const counterSaleMode = settings?.enableCounterSale === true;
+
+  // ── Barcode scanner (Part 11 + Counter Scan mode) — same entitlement rule
+  // as the full POS wizard: plan includes barcode_scanner AND the restaurant
+  // toggle is ON. When ON, the workspace switches ENTIRELY to Counter Scan
+  // mode: no category cards, no subcategory tabs, no item grid.
+  const canScanBarcode =
+    useSettingsStore((s) => s.barcodeScannerAvailable) === true &&
+    useSettingsStore((s) => s.settings?.barcodeScannerEnabled) === true;
+  const scanMode = canScanBarcode; // dedicated Counter Scan screen replaces the category/item UI
+  const scannerInputRef = useRef(null);
+  const [scanError, setScanError] = useState(null); // { barcode } of the last failed scan
+
+  const handleBarcodeScan = async (rawCode) => {
+    const code = String(rawCode || '').trim();
+    if (!code) return;
+    try {
+      const resp = await menuApi.getByBarcode(code);
+      const item = resp?.item || resp?.data?.item;
+      if (!item) {
+        // Controlled not-found: keep the scan screen alive (spec §10).
+        setScanError({ barcode: code });
+        addToast(`Item not found for barcode: ${code}`, 'error');
+        return;
+      }
+      setScanError(null);
+      addToCart({
+        id: `menu-${item.id}`,
+        name: item.name,
+        price: Number(item.price),
+        currentStock: item.currentStock ?? null,
+      });
+      addToast(`${item.name} added`, 'success');
+    } catch (e) {
+      // axios interceptor exposes the HTTP status as e.status (e.response is
+      // stripped from the processed error).
+      const status = e?.status ?? e?.response?.status;
+      if (status === 404) {
+        setScanError({ barcode: code });
+        addToast(`Item not found for barcode: ${code}`, 'error');
+      } else if (status === 403) {
+        addToast(e?.response?.data?.message || 'Barcode scanner is not enabled for this restaurant.', 'error');
+      } else {
+        addToast(e?.message || 'Barcode lookup failed', 'error');
+      }
+    } finally {
+      // Clear + refocus after every scan — continuous scanning workflow (§12).
+      requestAnimationFrame(() => {
+        if (scannerInputRef.current) {
+          scannerInputRef.current.value = '';
+          scannerInputRef.current.focus();
+        }
+      });
+    }
+  };
+
+  // Auto-focus the scanner input whenever scan mode mounts or re-renders.
+  useEffect(() => {
+    if (scanMode && scannerInputRef.current) {
+      scannerInputRef.current.focus();
+    }
+  }, [scanMode]);
 
   useEffect(() => {
     loadMenu();
@@ -73,15 +140,21 @@ export default function PosWorkspace() {
 
   const loadMenu = async () => {
     try {
-      const [menuResp, catResp] = await Promise.all([
+      const [menuResp, catResp, subResp] = await Promise.all([
         menuApi.getAll(),
         categoryApi.getAll(),
+        menuApi.getSubcategories(),
       ]);
       const items = (menuResp.items || []).map((m) => ({
         id: `menu-${m.id}`,
         name: m.name,
         price: Number(m.price),
         category: m.category?.name || 'Main Course',
+        subcategoryId: m.subcategoryId ?? m.subcategory?.id ?? null,
+        subcategoryName: m.subcategory?.name || null,
+        sku: m.sku || null,
+        barcode: m.barcode || null,
+        dietaryType: m.dietaryType || (m.isVeg !== false ? 'VEG' : 'NON_VEG'),
         description: m.description || '',
         image: m.image || PLACEHOLDER_IMAGE,
         isLive: m.isAvailable !== false,
@@ -95,8 +168,17 @@ export default function PosWorkspace() {
         icon: c.icon || 'utensils',
         isActive: c.isActive !== false,
       }));
+      const subs = (subResp?.data?.subcategories || subResp?.subcategories || []).map((s) => ({
+        id: s.id,
+        name: s.name,
+        categoryId: s.categoryId,
+        categoryName: s.category?.name || null,
+        isActive: s.isActive !== false,
+        sortOrder: s.sortOrder || 0,
+      }));
       setMenuItems(items);
       setCategories(cats);
+      setSubcategories(subs);
     } catch (e) {
       console.error(e);
     }
@@ -108,11 +190,17 @@ export default function PosWorkspace() {
     (c) => c.isActive !== false && liveItems.some((i) => i.category === c.name)
   );
 
-  const filteredItems = liveItems.filter((item) => {
-    const matchesCat = !selectedCategory || item.category === selectedCategory;
-    const matchesSearch = item.name.toLowerCase().includes(searchQuery.toLowerCase());
-    return matchesCat && matchesSearch;
+  const filteredItems = filterMenuItems(liveItems, {
+    selectedCategory: selectedCategory || 'All',
+    selectedSubcategory,
+    searchQuery,
   });
+
+  // Subcategory tabs for the selected category, with item counts (reuses
+  // already-loaded data — no per-click fetch). Hidden when none exist.
+  const subTabs = selectedCategory
+    ? subcategoryTabsFor(liveItems, subcategories, selectedCategory)
+    : [];
 
   const countForCategory = (name) => liveItems.filter((i) => i.category === name).length;
 
@@ -249,15 +337,70 @@ export default function PosWorkspace() {
   // ── Select a category → show its items ──
   const selectCategory = (name) => {
     setSelectedCategory(name);
+    setSelectedSubcategory(SUBCATEGORY_ALL); // category change resets subcategory (Part 2 req. 3)
     setSearchQuery('');
     setView('items');
   };
+
+  const selectSubcategory = (value) => setSelectedSubcategory(value);
 
   // When entering items view without a category, auto-select first
   const handleBackToCategories = () => {
     setSelectedCategory(null);
     setView('categories');
   };
+
+  // ── Counter Scan view (Barcode Scanner ON) — replaces the whole
+  // category/subcategory/item UI. Real counter-POS: scan area + cart. ──
+  const renderScanMode = () => (
+    <div className="flex-1 flex flex-col items-center overflow-y-auto py-6 px-4">
+      {/* Big scan target */}
+      <div className={`w-full max-w-xl rounded-3xl border-2 border-dashed flex flex-col items-center justify-center gap-3 py-10 px-6 text-center transition-all ${
+        scanError ? 'border-red-300 bg-red-50/60' : 'border-[#16A34A]/40 bg-[#16A34A]/5'
+      }`}>
+        {scanError ? (
+          <AlertTriangle className="w-12 h-12 text-red-500" />
+        ) : (
+          <ScanBarcode className="w-12 h-12 text-[#16A34A]" />
+        )}
+        <p className="text-base font-extrabold text-slate-800">
+          {scanError ? 'Product not found' : 'SCAN BARCODE'}
+        </p>
+        {scanError ? (
+          <p className="text-[11px] font-bold text-red-600">Barcode: <span className="font-mono">{scanError.barcode}</span></p>
+        ) : (
+          <p className="text-[11px] font-semibold text-slate-500">Scan product barcode to add item</p>
+        )}
+      </div>
+
+      {/* Scanner input — HID scanners submit with Enter; kept focused after
+          every scan so the cashier can Scan → Scan → Scan → Payment. */}
+      <form
+        className="w-full max-w-xl mt-5"
+        onSubmit={(e) => {
+          e.preventDefault();
+          const el = e.target.elements.barcodeInput;
+          const v = el.value;
+          handleBarcodeScan(v);
+          el.value = '';
+        }}
+      >
+        <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Barcode</label>
+        <input
+          type="text"
+          name="barcodeInput"
+          placeholder="Scan barcode..."
+          autoComplete="off"
+          ref={scannerInputRef}
+          className="mt-1 w-full h-14 px-4 bg-white border-2 border-slate-200 focus:border-[#16A34A] rounded-2xl text-lg font-mono font-bold outline-none focus:ring-2 focus:ring-[#16A34A]/20 transition-all"
+        />
+      </form>
+
+      <p className="text-[10px] text-slate-400 mt-3 flex items-center gap-1.5">
+        <ScanLine className="w-3.5 h-3.5" /> Scanner stays focused — scan items back to back
+      </p>
+    </div>
+  );
 
   // ── Category picker view (large touch cards) ──
   const renderCategories = () => (
@@ -379,11 +522,22 @@ export default function PosWorkspace() {
               {counterSaleMode ? 'Basic POS' : 'POS Ordering'}
             </h3>
             <p className="text-[10px] text-slate-400 mt-0.5 truncate">
-              {view === 'categories' ? 'Select a category to start' : `${selectedCategory || 'All'} · ${filteredItems.length} items`}
+              {scanMode ? 'Scan products to add them to the sale' : view === 'categories' ? 'Select a category to start' : `${selectedCategory || 'All'} · ${filteredItems.length} items`}
             </p>
           </div>
+          {scanMode && (
+            <span className="ml-auto shrink-0 inline-flex items-center gap-1 text-[9px] font-extrabold uppercase tracking-wider px-2.5 py-1 rounded-full bg-[#16A34A] text-white">
+              <ScanLine className="w-3 h-3" /> Scan Mode On
+            </span>
+          )}
         </div>
 
+        {/* COUNTER SCAN MODE: no categories/subcategories/items at all —
+            the dedicated scan screen replaces the browsing UI (spec §8). */}
+        {scanMode ? (
+          renderScanMode()
+        ) : (
+          <>
         {/* Items view: quick category chips for fast navigation */}
         {view === 'items' && (
           <div className="flex gap-1 overflow-x-auto pb-0.5 no-scrollbar shrink-0">
@@ -397,6 +551,27 @@ export default function PosWorkspace() {
           </div>
         )}
 
+        {/* Subcategory tabs — directly below the category row (Part 2 req. 1-4).
+            Hidden when the selected category has no subcategories at all. */}
+        {view === 'items' && selectedCategory && subTabs.length > 0 && (
+          <div className="flex gap-1 overflow-x-auto pb-0.5 no-scrollbar shrink-0">
+            {[{ id: SUBCATEGORY_ALL, name: 'All' }, ...subTabs].map((sub) => (
+              <button key={sub.id} onClick={() => selectSubcategory(sub.id)}
+                className={`shrink-0 px-3 py-1.5 text-[10px] font-bold rounded-lg border transition-all cursor-pointer ${
+                  selectedSubcategory === sub.id
+                    ? 'bg-slate-800 text-white border-slate-800'
+                    : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'
+                }`}>
+                {sub.name}{typeof sub.count === 'number' ? ` (${sub.count})` : ''}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Barcode input in NORMAL (scan-off) mode was removed: per spec §13
+            both interfaces must never show at once. Scan mode owns the
+            barcode workflow; normal mode is Category → Subcategory → Item. */}
+
         {/* Search (items view only) */}
         {view === 'items' && (
           <div className="relative shrink-0">
@@ -409,6 +584,8 @@ export default function PosWorkspace() {
 
         {/* Category picker OR item grid — never both */}
         {view === 'categories' ? renderCategories() : renderItems()}
+          </>
+        )}
       </div>
 
       {/* Right: Cart — full width below the grid on mobile, wider fixed rail on md+ for touch comfort */}

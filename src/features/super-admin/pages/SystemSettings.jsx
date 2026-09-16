@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { superAdminApi } from '../../../api/superAdmin.api';
-import { Loader2, Save, RefreshCw, RotateCcw, Shield, AlertTriangle } from 'lucide-react';
+import { Loader2, Save, RefreshCw, RotateCcw, Shield, AlertTriangle, Mail, Send, CheckCircle2, XCircle } from 'lucide-react';
 import ConfirmationDialog from '../../../components/ConfirmationDialog';
 
 // Backend masks configured secrets with this marker — the UI treats it as
@@ -43,6 +43,90 @@ export default function SystemSettings() {
   const [toast, setToast] = useState(null);
   const toastTimer = useRef(null);
   const savingRef = useRef(false);
+
+  // ── Email (SMTP) settings state ──
+  // Loaded from the dedicated /super-admin/email/* endpoints — separate from
+  // the generic key-value SystemSetting list. The password is ALWAYS rendered
+  // masked; submitting the mask preserves the stored encrypted secret.
+  const [emailCfg, setEmailCfg] = useState(null);
+  const [emailOriginal, setEmailOriginal] = useState(null);
+  const [emailLoading, setEmailLoading] = useState(true);
+  const [emailSaving, setEmailSaving] = useState(false);
+  const [emailTesting, setEmailTesting] = useState(false);
+  const [testRecipient, setTestRecipient] = useState('');
+
+  useEffect(() => { loadEmailSettings(); return () => clearTimeout(toastTimer.current); }, []);
+
+  const loadEmailSettings = async () => {
+    try {
+      setEmailLoading(true);
+      const resp = await superAdminApi.getEmailSettings();
+      const data = resp?.data || resp || {};
+      // Render the mask when a password exists — never the secret itself.
+      const view = { ...data, password: data.passwordConfigured ? SECRET_MASK : '' };
+      setEmailOriginal(view);
+      setEmailCfg(view);
+    } catch (e) {
+      showToast(e.message || 'Unable to load email settings', 'error');
+    } finally {
+      setEmailLoading(false);
+    }
+  };
+
+  const handleEmailField = (key, value) => {
+    setEmailCfg((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const handleSaveEmail = async () => {
+    if (emailSaving || !emailCfg) return;
+    // Only send changed fields; the masked password is sent as-is (preserved).
+    const payload = {};
+    ['enabled', 'host', 'port', 'secure', 'user', 'password', 'fromName', 'fromEmail', 'replyTo', 'superAdminNotificationEmails'].forEach((k) => {
+      if (JSON.stringify(emailCfg[k]) !== JSON.stringify(emailOriginal?.[k])) payload[k] = emailCfg[k];
+    });
+    if (Object.keys(payload).length === 0) { showToast('No email changes to save.'); return; }
+    setEmailSaving(true);
+    try {
+      await superAdminApi.updateEmailSettings(payload);
+      showToast('Email settings saved.');
+      await loadEmailSettings();
+    } catch (e) {
+      showToast(e.message || 'Unable to save email settings', 'error');
+    } finally {
+      setEmailSaving(false);
+    }
+  };
+
+  const handleVerifySmtp = async () => {
+    if (emailTesting) return;
+    setEmailTesting(true);
+    try {
+      const resp = await superAdminApi.verifyEmailSettings();
+      const data = resp?.data || resp || {};
+      showToast(data.ok ? 'SMTP connection verified successfully.' : (data.error || 'SMTP verification failed.'), data.ok ? 'success' : 'error');
+    } catch (e) {
+      showToast(e.message || 'SMTP verification failed', 'error');
+    } finally {
+      setEmailTesting(false);
+    }
+  };
+
+  const handleSendTest = async () => {
+    if (emailTesting) return;
+    if (!testRecipient || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(testRecipient)) {
+      showToast('Enter a valid test recipient email.', 'error');
+      return;
+    }
+    setEmailTesting(true);
+    try {
+      await superAdminApi.sendTestEmail(testRecipient);
+      showToast(`Test email sent to ${testRecipient}.`);
+    } catch (e) {
+      showToast(e.message || 'Test email failed', 'error');
+    } finally {
+      setEmailTesting(false);
+    }
+  };
 
   useEffect(() => { loadSettings(); return () => clearTimeout(toastTimer.current); }, []);
 
@@ -227,6 +311,115 @@ export default function SystemSettings() {
             {saving ? 'Saving...' : 'Save Changes'}
           </button>
         </div>
+      </div>
+
+      {/* ─── Email (SMTP) Configuration — dedicated section ─── */}
+      <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-4">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <div className="flex items-center gap-2">
+            <Mail className="w-4 h-4 text-slate-500" />
+            <div>
+              <h2 className="text-sm font-extrabold text-slate-800">Email (SMTP) Configuration</h2>
+              <p className="text-[10px] font-semibold text-slate-400">
+                Used for verification codes, application updates and admin credentials.
+                Email verification for onboarding is always mandatory and never disabled.
+              </p>
+            </div>
+          </div>
+          {emailCfg?.status && (
+            <span className={`text-[10px] font-bold rounded-full px-2.5 py-1 border ${emailCfg.status === 'CONFIGURED' ? 'bg-green-50 border-green-200 text-green-700' : emailCfg.status === 'PARTIAL' ? 'bg-amber-50 border-amber-200 text-amber-700' : 'bg-red-50 border-red-200 text-red-700'}`}>
+              {emailCfg.status === 'CONFIGURED' ? 'Configured' : emailCfg.status === 'PARTIAL' ? 'Partially configured' : 'Not configured'}
+            </span>
+          )}
+        </div>
+
+        {emailCfg && (
+          <>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="flex flex-col gap-2">
+                <label className="text-xs font-bold text-slate-600">SMTP Host</label>
+                <input value={emailCfg.host || ''} onChange={(e) => handleEmailField('host', e.target.value)} disabled={emailSaving}
+                  className="w-full h-11 px-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold outline-none focus:border-[#16A34A] disabled:opacity-50" />
+              </div>
+              <div className="flex flex-col gap-2">
+                <label className="text-xs font-bold text-slate-600">SMTP Port</label>
+                <input type="number" value={emailCfg.port ?? 587} onChange={(e) => handleEmailField('port', Number(e.target.value))} disabled={emailSaving}
+                  className="w-full h-11 px-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold outline-none focus:border-[#16A34A] disabled:opacity-50" />
+              </div>
+              <div className="flex flex-col gap-2">
+                <label className="text-xs font-bold text-slate-600">SMTP Username</label>
+                <input value={emailCfg.user || ''} onChange={(e) => handleEmailField('user', e.target.value)} disabled={emailSaving}
+                  className="w-full h-11 px-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold outline-none focus:border-[#16A34A] disabled:opacity-50" />
+              </div>
+              <div className="flex flex-col gap-2">
+                <label className="text-xs font-bold text-slate-600">SMTP Password</label>
+                <input type="password" value={emailCfg.password || ''} onChange={(e) => handleEmailField('password', e.target.value)} disabled={emailSaving}
+                  className="w-full h-11 px-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold outline-none focus:border-[#16A34A] disabled:opacity-50" />
+                {emailCfg.password === SECRET_MASK && (
+                  <p className="text-[10px] text-slate-400 flex items-center gap-1"><Shield className="w-3 h-3" /> Stored secret is preserved — leave as-is to keep it.</p>
+                )}
+              </div>
+              <div className="flex flex-col gap-2">
+                <label className="text-xs font-bold text-slate-600">From Name</label>
+                <input value={emailCfg.fromName || ''} onChange={(e) => handleEmailField('fromName', e.target.value)} disabled={emailSaving}
+                  className="w-full h-11 px-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold outline-none focus:border-[#16A34A] disabled:opacity-50" />
+              </div>
+              <div className="flex flex-col gap-2">
+                <label className="text-xs font-bold text-slate-600">From Email</label>
+                <input type="email" value={emailCfg.fromEmail || ''} onChange={(e) => handleEmailField('fromEmail', e.target.value)} disabled={emailSaving}
+                  className="w-full h-11 px-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold outline-none focus:border-[#16A34A] disabled:opacity-50" />
+              </div>
+              <div className="flex flex-col gap-2">
+                <label className="text-xs font-bold text-slate-600">Reply-To (optional)</label>
+                <input type="email" value={emailCfg.replyTo || ''} onChange={(e) => handleEmailField('replyTo', e.target.value)} disabled={emailSaving}
+                  className="w-full h-11 px-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold outline-none focus:border-[#16A34A] disabled:opacity-50" />
+              </div>
+              <div className="flex flex-col gap-2">
+                <label className="text-xs font-bold text-slate-600">Super Admin Notification Emails (comma-separated)</label>
+                <input value={(emailCfg.superAdminNotificationEmails || []).join(', ')}
+                  onChange={(e) => handleEmailField('superAdminNotificationEmails', e.target.value.split(',').map((s) => s.trim()).filter(Boolean))}
+                  disabled={emailSaving}
+                  className="w-full h-11 px-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold outline-none focus:border-[#16A34A] disabled:opacity-50" />
+              </div>
+              <div className="flex flex-col gap-2">
+                <label className="text-xs font-bold text-slate-600">General Notification Emails</label>
+                <label className="flex items-center gap-2 cursor-pointer h-11">
+                  <input type="checkbox" checked={emailCfg.generalNotificationsEnabled !== false}
+                    onChange={(e) => handleEmailField('generalNotificationsEnabled', e.target.checked)} disabled={emailSaving}
+                    className="w-5 h-5 accent-[#16A34A]" />
+                  <span className="text-xs text-slate-500">{emailCfg.generalNotificationsEnabled !== false ? 'Enabled' : 'Disabled'} — verification codes are ALWAYS sent</span>
+                </label>
+              </div>
+            </div>
+
+            <div className="flex flex-col sm:flex-row sm:items-center gap-3 pt-1">
+              <button onClick={handleSaveEmail} disabled={emailSaving}
+                className="h-10 px-5 bg-[#16A34A] hover:bg-[#15803D] text-white rounded-xl text-xs font-bold transition-all disabled:opacity-40 cursor-pointer flex items-center gap-1.5">
+                {emailSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                {emailSaving ? 'Saving...' : 'Save Email Settings'}
+              </button>
+              <button onClick={handleVerifySmtp} disabled={emailTesting}
+                className="h-10 px-4 bg-white border border-slate-200 hover:bg-slate-50 text-slate-600 rounded-xl text-xs font-bold transition-all disabled:opacity-40 cursor-pointer flex items-center gap-1.5">
+                {emailTesting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
+                Verify SMTP
+              </button>
+            </div>
+
+            <div className="border-t border-slate-100 pt-3 flex flex-col sm:flex-row sm:items-end gap-3">
+              <div className="flex-1">
+                <label className="text-xs font-bold text-slate-600 block mb-1.5">Send Test Email</label>
+                <input type="email" placeholder="recipient@example.com" value={testRecipient}
+                  onChange={(e) => setTestRecipient(e.target.value)} disabled={emailTesting}
+                  className="w-full h-10 px-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold outline-none focus:border-[#16A34A] disabled:opacity-50" />
+              </div>
+              <button onClick={handleSendTest} disabled={emailTesting}
+                className="h-10 px-4 bg-white border border-indigo-200 hover:bg-indigo-50 text-indigo-700 rounded-xl text-xs font-bold transition-all disabled:opacity-40 cursor-pointer flex items-center gap-1.5">
+                {emailTesting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+                Send Test
+              </button>
+            </div>
+          </>
+        )}
       </div>
 
       <ConfirmationDialog

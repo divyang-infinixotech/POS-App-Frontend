@@ -1,15 +1,15 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { superAdminApi } from '../../../api/superAdmin.api';
+import { emailError as emailFieldError, emailOptionalError, normalizeEmail } from '../../../utils/email';
 import {
   X, Loader2, CheckCircle2, AlertTriangle, ChevronLeft, ChevronRight,
-  Building2, Users, FileText, CreditCard, ShieldCheck, Eye, EyeOff,
+  Building2, Users, FileText, CreditCard, Eye, EyeOff,
   Upload, Trash2, File, Check, ExternalLink, Info,
 } from 'lucide-react';
+import { BUSINESS_TYPES, filterPlansForBusinessType, modeLabel } from '../../../utils/businessTypes';
 
 const CURRENCIES = ['INR', 'USD', 'EUR', 'GBP', 'AED'];
-const LANGUAGES = ['en', 'hi', 'gu', 'fr', 'ar'];
 const COUNTRIES = ['India', 'USA', 'UAE', 'UK', 'Singapore', 'Canada', 'Australia'];
-const BUSINESS_TYPES = ['RESTAURANT', 'CAFE', 'BAR', 'FOOD_TRUCK', 'CLOUD_KITCHEN', 'OTHER'];
 
 const DOCUMENT_TYPES = [
   { key: 'GST_CERTIFICATE', label: 'GST Certificate', required: true },
@@ -24,16 +24,18 @@ const DOCUMENT_TYPES = [
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 const ALLOWED_TYPES = ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png'];
 
-const POLICY_VERSION = '2026.01';
-
+// 5-step platform administrative wizard — NO Agreement step. Super Admin
+// creates a tenant on behalf of the platform; mandatory Terms & Privacy
+// acceptance belongs to the NEW-USER self-serve registration flow (its Legal
+// step), not here.
 const STEPS = [
   { id: 1, label: 'Restaurant', icon: Building2 },
   { id: 2, label: 'Owner', icon: Users },
   { id: 3, label: 'Documents', icon: FileText },
   { id: 4, label: 'Plan', icon: CreditCard },
-  { id: 5, label: 'Agreement', icon: ShieldCheck },
-  { id: 6, label: 'Review', icon: Eye },
+  { id: 5, label: 'Review', icon: Eye },
 ];
+const FINAL_STEP = 5;
 
 export default function RestaurantOnboarding({ onClose, onSaved }) {
   const [step, setStep] = useState(1);
@@ -50,6 +52,7 @@ export default function RestaurantOnboarding({ onClose, onSaved }) {
     address: '', city: '', state: '', country: 'India', pincode: '',
     phone: '', email: '', website: '', gstNumber: '', fssaiNumber: '',
     timezone: 'Asia/Kolkata', currency: 'INR', language: 'en',
+    dietaryMode: 'VEG_AND_NON_VEG', // Food/Dietary Configuration (Part 1)
   });
 
   // Step 2: Owner Info
@@ -68,13 +71,7 @@ export default function RestaurantOnboarding({ onClose, onSaved }) {
   const [billingCycle, setBillingCycle] = useState('MONTHLY');
   const [trialDays, setTrialDays] = useState(15);
 
-  // Step 5: Agreements
-  const [agreements, setAgreements] = useState({
-    securityPolicy: false,
-    termsOfService: false,
-  });
-
-  // Step 7: Result
+  // Step 6: Result
   const [result, setResult] = useState(null);
 
   useEffect(() => {
@@ -120,24 +117,23 @@ export default function RestaurantOnboarding({ onClose, onSaved }) {
         if (!restaurant.pincode.trim()) return 'Pincode is required';
         if (!restaurant.phone.trim()) return 'Phone number is required';
         return null;
-      case 2:
+      case 2: {
         if (!owner.ownerName.trim()) return 'Owner name is required';
-        if (!owner.ownerEmail.trim()) return 'Owner email is required';
+        const ownerEmailMsg = owner.ownerEmail.trim() ? emailOptionalError(owner.ownerEmail) : 'Owner email is required';
+        if (ownerEmailMsg) return ownerEmailMsg;
         if (!owner.ownerPhone.trim()) return 'Owner phone is required';
         if (!owner.adminName.trim()) return 'Admin name is required';
-        if (!owner.adminEmail.trim()) return 'Admin email is required';
+        const adminEmailMsg = emailFieldError(owner.adminEmail);
+        if (adminEmailMsg) return adminEmailMsg;
         if (!owner.adminPassword.trim()) return 'Admin password is required';
         if (owner.adminPassword.length < 6) return 'Admin password must be at least 6 characters';
         return null;
+      }
       case 3:
         // Documents are optional, but we validate uploaded ones
         return null;
       case 4:
         if (!selectedPlan) return 'Please select a subscription plan';
-        return null;
-      case 5:
-        if (!agreements.securityPolicy) return 'You must accept the Security Policy';
-        if (!agreements.termsOfService) return 'You must accept the Terms of Service and Privacy Policy';
         return null;
       default:
         return null;
@@ -152,7 +148,7 @@ export default function RestaurantOnboarding({ onClose, onSaved }) {
     }
     setError('');
     setCompletedSteps(prev => new Set([...prev, step]));
-    setStep(prev => Math.min(prev + 1, 6));
+    setStep(prev => Math.min(prev + 1, FINAL_STEP));
     scrollToTop();
   };
 
@@ -238,20 +234,19 @@ export default function RestaurantOnboarding({ onClose, onSaved }) {
         language: restaurant.language,
         businessType: restaurant.businessType || 'RESTAURANT',
         website: restaurant.website || undefined,
+        // Food/Dietary Configuration — persisted to tenant RestaurantSetting
+        dietaryMode: restaurant.dietaryMode || 'VEG_AND_NON_VEG',
         // Admin
         adminName: owner.adminName,
-        adminEmail: owner.adminEmail,
+        adminEmail: normalizeEmail(owner.adminEmail),
         adminPassword: owner.adminPassword,
         // Plan
         planId: selectedPlan?.id || undefined,
         subscriptionPlan: selectedPlan?.code || undefined,
         trialDays: selectedPlan?.code === 'TRIAL' ? trialDays : undefined,
-        // Policy agreements
-        policyAgreements: [
-          { policyType: 'SECURITY_POLICY', policyVersion: POLICY_VERSION },
-          { policyType: 'TERMS_OF_SERVICE', policyVersion: POLICY_VERSION },
-          { policyType: 'PRIVACY_POLICY', policyVersion: POLICY_VERSION },
-        ],
+        // No agreement/policy payload — this wizard is a platform
+        // administrative operation with NO Agreement step. Policy consents
+        // are recorded only in the new-user self-serve registration flow.
       };
 
       const resp = await superAdminApi.createRestaurantOnboarding(payload);
@@ -276,7 +271,7 @@ export default function RestaurantOnboarding({ onClose, onSaved }) {
       }
 
       setResult(resp.data);
-      setStep(7);
+      setStep(6); // success screen (outside the 5 wizard steps)
       scrollToTop();
     } catch (e) {
       setError(e.message || 'Failed to create restaurant');
@@ -341,8 +336,14 @@ export default function RestaurantOnboarding({ onClose, onSaved }) {
         </div>
         <div className="space-y-1">
           <label className="text-[10px] font-bold text-slate-600">Business Type</label>
-          <select value={restaurant.businessType} onChange={e => updateRestaurant('businessType', e.target.value)} className="w-full h-9 px-3 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold outline-none focus:border-[#16A34A]">
-            {BUSINESS_TYPES.map(bt => <option key={bt} value={bt}>{bt.replace(/_/g, ' ')}</option>)}
+          <select value={restaurant.businessType} onChange={e => {
+            updateRestaurant('businessType', e.target.value);
+            // Mode changes with the type — drop a now-incompatible plan choice.
+            if (selectedPlan && !filterPlansForBusinessType(plans, e.target.value).some(p => p.id === selectedPlan.id)) {
+              setSelectedPlan(null);
+            }
+          }} className="w-full h-9 px-3 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold outline-none focus:border-[#16A34A]">
+            {BUSINESS_TYPES.map(bt => <option key={bt.value} value={bt.value}>{bt.label}</option>)}
           </select>
         </div>
         <div className="space-y-1">
@@ -405,12 +406,28 @@ export default function RestaurantOnboarding({ onClose, onSaved }) {
             {CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
           </select>
         </div>
-        <div className="space-y-1">
-          <label className="text-[10px] font-bold text-slate-600">Language</label>
-          <select value={restaurant.language} onChange={e => updateRestaurant('language', e.target.value)} className="w-full h-9 px-3 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold outline-none focus:border-[#16A34A]">
-            {LANGUAGES.map(l => <option key={l} value={l}>{l.toUpperCase()}</option>)}
-          </select>
-        </div>
+        {/* Language field removed from this wizard (default 'en' is still
+            submitted to the backend; language support itself is untouched). */}
+      </div>
+
+      {/* Food / Dietary Configuration (Part 1) — NOT a separate wizard step */}
+      <h3 className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500 pt-2">Food / Dietary Configuration</h3>
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => updateRestaurant('dietaryMode', 'VEG_ONLY')}
+          className={`px-3 py-1.5 rounded-lg text-[11px] font-bold transition-colors ${restaurant.dietaryMode === 'VEG_ONLY' ? 'bg-[#16A34A] text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+        >
+          Veg Only
+        </button>
+        <button
+          type="button"
+          onClick={() => updateRestaurant('dietaryMode', 'VEG_AND_NON_VEG')}
+          className={`px-3 py-1.5 rounded-lg text-[11px] font-bold transition-colors ${restaurant.dietaryMode === 'VEG_AND_NON_VEG' ? 'bg-[#16A34A] text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+        >
+          Veg + Non-Veg
+        </button>
+        <span className="text-[10px] text-slate-400">Maximum food type this restaurant can sell</span>
       </div>
     </div>
   );
@@ -548,7 +565,9 @@ export default function RestaurantOnboarding({ onClose, onSaved }) {
     <div className="space-y-4">
       <h3 className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500">Select Subscription Plan</h3>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        {plans.filter(p => p.isActive).map(plan => {
+        {/* Only plans compatible with the business type's mode are shown —
+            the backend rejects mismatches at creation with a 400. */}
+        {filterPlansForBusinessType(plans.filter(p => p.isActive), restaurant.businessType).map(plan => {
           const isSelected = selectedPlan?.id === plan.id;
           return (
             <button
@@ -562,6 +581,7 @@ export default function RestaurantOnboarding({ onClose, onSaved }) {
             >
               <div className="flex items-center justify-between mb-2">
                 <span className="text-xs font-extrabold text-slate-800">{plan.name}</span>
+                <span className="text-[8px] font-bold px-1.5 py-0.5 rounded-full uppercase tracking-wider bg-slate-100 text-slate-500">{modeLabel(plan.businessMode)}</span>
                 {isSelected && <CheckCircle2 className="w-4 h-4 text-[#16A34A]" />}
               </div>
               <p className="text-[10px] text-slate-500 mb-2">{plan.description || plan.code}</p>
@@ -617,67 +637,8 @@ export default function RestaurantOnboarding({ onClose, onSaved }) {
     </div>
   );
 
-  // ── Step 5: Security & Policy Agreement ──
+  // ── Step 5: Review & Confirm ──
   const renderStep5 = () => (
-    <div className="space-y-4">
-      <h3 className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500">Security & Policy Agreement</h3>
-
-      <div className="border border-slate-200 rounded-xl p-4 bg-white">
-        <h4 className="text-xs font-extrabold text-slate-800 mb-2">Terms of Service</h4>
-        <div className="text-[10px] text-slate-500 space-y-2 max-h-32 overflow-y-auto">
-          <p>By using this platform, you agree to the following terms and conditions. This is a SaaS multi-tenant restaurant POS platform.</p>
-          <p>You are responsible for maintaining the security of your restaurant account credentials, ensuring accurate business information, and compliance with applicable laws.</p>
-          <p>The platform reserves the right to suspend or terminate services for violations of these terms.</p>
-        </div>
-      </div>
-
-      <div className="border border-slate-200 rounded-xl p-4 bg-white">
-        <h4 className="text-xs font-extrabold text-slate-800 mb-2">Privacy Policy</h4>
-        <div className="text-[10px] text-slate-500 space-y-2 max-h-32 overflow-y-auto">
-          <p>We collect and process business information, user account data, and operational data necessary to provide restaurant POS services.</p>
-          <p>Your data is isolated per tenant and is not shared with other restaurants. We implement industry-standard security measures to protect your data.</p>
-          <p>You may request data export or deletion in accordance with applicable data protection regulations.</p>
-        </div>
-      </div>
-
-      <div className="border border-slate-200 rounded-xl p-4 bg-white">
-        <h4 className="text-xs font-extrabold text-slate-800 mb-2">Security Policy</h4>
-        <div className="text-[10px] text-slate-500 space-y-2 max-h-32 overflow-y-auto">
-          <p>You are responsible for protecting your restaurant account credentials, customer data, and system access.</p>
-          <p>Implement strong passwords, enable multi-factor authentication where available, and restrict access to authorized personnel only.</p>
-          <p>Report any security incidents immediately to the platform administration.</p>
-        </div>
-      </div>
-
-      <div className="space-y-3 mt-4">
-        <label className="flex items-start gap-3 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={agreements.securityPolicy}
-            onChange={e => setAgreements(prev => ({ ...prev, securityPolicy: e.target.checked }))}
-            className="w-4 h-4 mt-0.5 rounded border-slate-300 text-[#16A34A] accent-[#16A34A]"
-          />
-          <span className="text-[10px] font-semibold text-slate-600 leading-relaxed">
-            I confirm that I have read and agree to the platform <strong>Security Policy</strong> and understand my responsibilities for protecting restaurant account credentials, customer data, and system access.
-          </span>
-        </label>
-        <label className="flex items-start gap-3 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={agreements.termsOfService}
-            onChange={e => setAgreements(prev => ({ ...prev, termsOfService: e.target.checked }))}
-            className="w-4 h-4 mt-0.5 rounded border-slate-300 text-[#16A34A] accent-[#16A34A]"
-          />
-          <span className="text-[10px] font-semibold text-slate-600 leading-relaxed">
-            I agree to the <strong>Terms of Service</strong> and <strong>Privacy Policy</strong>. Policy version: {POLICY_VERSION}
-          </span>
-        </label>
-      </div>
-    </div>
-  );
-
-  // ── Step 6: Review & Confirm ──
-  const renderStep6 = () => (
     <div className="space-y-4">
       <h3 className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500">Review & Confirm</h3>
 
@@ -748,28 +709,8 @@ export default function RestaurantOnboarding({ onClose, onSaved }) {
         </div>
       </div>
 
-      {/* Agreements */}
-      <div className="border border-slate-200 rounded-xl p-4 bg-white">
-        <div className="flex items-center gap-2 mb-3">
-          <ShieldCheck className="w-3.5 h-3.5 text-slate-400" />
-          <h4 className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500">Agreements</h4>
-        </div>
-        <div className="space-y-1.5 text-[10px]">
-          <div className="flex items-center gap-2">
-            <Check className="w-3 h-3 text-[#16A34A]" />
-            <span className="font-semibold text-slate-700">Security Policy — v{POLICY_VERSION}</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <Check className="w-3 h-3 text-[#16A34A]" />
-            <span className="font-semibold text-slate-700">Terms of Service — v{POLICY_VERSION}</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <Check className="w-3 h-3 text-[#16A34A]" />
-            <span className="font-semibold text-slate-700">Privacy Policy — v{POLICY_VERSION}</span>
-          </div>
-          <p className="text-[9px] text-slate-400 mt-1">Accepted by Super Admin • {new Date().toLocaleString()}</p>
-        </div>
-      </div>
+      {/* Agreements section removed — Super Admin creation is a platform
+          administrative operation with no consent step. */}
 
       <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 flex items-start gap-2">
         <AlertTriangle className="w-4 h-4 text-amber-500 mt-0.5 shrink-0" />
@@ -778,8 +719,8 @@ export default function RestaurantOnboarding({ onClose, onSaved }) {
     </div>
   );
 
-  // ── Step 7: Success ──
-  const renderStep7 = () => (
+  // ── Success screen (after the 5 wizard steps) ──
+  const renderSuccess = () => (
     <div className="text-center py-8">
       <div className="w-16 h-16 rounded-full bg-[#16A34A]/10 border border-[#16A34A]/20 flex items-center justify-center mx-auto mb-4">
         <CheckCircle2 className="w-8 h-8 text-[#16A34A]" />
@@ -813,8 +754,7 @@ export default function RestaurantOnboarding({ onClose, onSaved }) {
       case 3: return renderStep3();
       case 4: return renderStep4();
       case 5: return renderStep5();
-      case 6: return renderStep6();
-      case 7: return renderStep7();
+      case 6: return renderSuccess();
       default: return null;
     }
   };
@@ -826,10 +766,10 @@ export default function RestaurantOnboarding({ onClose, onSaved }) {
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
           <div>
             <h2 className="text-sm font-extrabold text-slate-800">
-              {step === 7 ? 'Onboarding Complete' : 'Add Restaurant — Onboarding'}
+              {step === 6 ? 'Onboarding Complete' : 'Add Restaurant — Onboarding'}
             </h2>
             <p className="text-[10px] text-slate-500 mt-0.5">
-              {step === 7 ? 'Restaurant successfully created' : `Step ${step} of 6`}
+              {step === 6 ? 'Restaurant successfully created' : `Step ${step} of ${FINAL_STEP}`}
             </p>
           </div>
           <button onClick={onClose} className="p-1.5 hover:bg-slate-100 rounded-lg transition-all cursor-pointer">
@@ -838,7 +778,7 @@ export default function RestaurantOnboarding({ onClose, onSaved }) {
         </div>
 
         {/* Progress */}
-        {step < 7 && renderProgress()}
+        {step <= FINAL_STEP && renderProgress()}
 
         {/* Error */}
         {error && (
@@ -854,7 +794,7 @@ export default function RestaurantOnboarding({ onClose, onSaved }) {
         </div>
 
         {/* Actions */}
-        {step < 7 && (
+        {step <= FINAL_STEP && (
           <div className="flex justify-between items-center px-6 py-4 border-t border-slate-100">
             <div>
               {step > 1 && (
@@ -868,7 +808,7 @@ export default function RestaurantOnboarding({ onClose, onSaved }) {
               )}
             </div>
             <div className="flex gap-2">
-              {step < 6 ? (
+              {step < FINAL_STEP ? (
                 <button
                   onClick={goNext}
                   className="h-9 px-5 bg-[#16A34A] hover:bg-[#15803D] text-white rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"

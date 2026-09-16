@@ -2,6 +2,8 @@
 // Uses dynamic import so missing socket.io-client doesn't crash the app.
 // Polling fallback in useSocket hook handles data refresh when socket is down.
 
+import API_BASE_URL from '../config/apiConfig';
+
 let io = null;
 let ioPromise = null;
 
@@ -41,7 +43,15 @@ export async function connectSocket(token) {
       return null;
     }
 
-    const apiUrl = import.meta.env.VITE_SOCKET_URL || import.meta.env.VITE_API_URL || 'http://localhost:5001/api';
+    // API_BASE_URL already applies the mixed-content HTTPS guard (Part 12).
+    let apiUrl = import.meta.env.VITE_SOCKET_URL || API_BASE_URL;
+    if (
+      typeof window !== 'undefined' &&
+      window.location?.protocol === 'https:' &&
+      apiUrl.startsWith('http://')
+    ) {
+      apiUrl = `https://${apiUrl.slice('http://'.length)}`;
+    }
     const serverUrl = apiUrl.replace(/\/api$/, '');
 
     socket = ioClient(serverUrl, {

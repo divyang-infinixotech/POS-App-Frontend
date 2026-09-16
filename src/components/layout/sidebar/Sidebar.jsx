@@ -17,7 +17,7 @@ import {
 import AppLogo from '../../common/AppLogo';
 import { cn } from '../../../lib/utils';
 import { useAuthStore, useUiStore, useSettingsStore, useCartStore } from '../../../store';
-import { canAccessScreen, SCREEN_FEATURES, hasFeature, isScreenAllowedForBusinessMode } from '../../../utils/permissions';
+import { canAccessScreen, SCREEN_FEATURES, hasFeature, isScreenAllowedForBusinessMode, screenPermissionKey, hasStaffPermission } from '../../../utils/permissions';
 
 // Static sidebar items (order-creation entry is inserted dynamically per business mode)
 const navItemsBase = [
@@ -25,7 +25,7 @@ const navItemsBase = [
   { screen: 'tables', label: 'Floors & Tables', icon: Layers, setting: 'enableFloorManagement' },
   { screen: 'active_orders', label: 'Active Orders', icon: Clock, setting: 'enableActiveOrders' },
   { screen: 'menu', label: 'Menu & Stock', icon: FileSpreadsheet, setting: 'enableMenu' },
-  { screen: 'staff', label: 'Staff Roster', icon: Users },
+  { screen: 'staff', label: 'Staff Roster', icon: Users, setting: 'enableStaffRoster' },
   { screen: 'reports', label: 'Reports & Sales', icon: FileText, setting: 'enableReports' },
   { screen: 'settings', label: 'POS Settings', icon: SettingsIcon },
 ];
@@ -37,10 +37,14 @@ const navItemsBase = [
  * POS Ordering toggle OFF + Restaurant mode → "New Order" (TakeOrderWizard)
  * POS Ordering toggle OFF + Basic POS → null (no order creation item)
  */
-function getOrderNavItem(businessMode, enablePosOrdering) {
+function getOrderNavItem(businessMode, enablePosOrdering, settings) {
   if (enablePosOrdering) {
     // Restaurant mode: POS Ordering opens the TakeOrderWizard (full restaurant flow)
     if (businessMode === 'restaurant') {
+      // Barcode Scanner ON (Part 11 + Counter Scan): the dedicated Counter
+      // Scan workspace REPLACES the wizard (spec §8/§13 — never both). The
+      // screen stays 'new_order' (restaurant-mode-allowed); NewOrderPage
+      // renders PosWorkspace when the scanner toggle is ON.
       return { screen: 'new_order', label: 'POS Ordering', icon: ShoppingCart, setting: 'enablePosOrdering' };
     }
     // Counter/Hybrid mode: POS Ordering opens Basic POS (quick billing)
@@ -56,7 +60,7 @@ function getOrderNavItem(businessMode, enablePosOrdering) {
 
 export default function Sidebar() {
   const { sidebarCollapsed, toggleSidebar, currentScreen, setScreen } = useUiStore();
-  const { user, subscription, logout, lockTerminal } = useAuthStore();
+  const { user, subscription, logout, lockTerminal, staffPermissions } = useAuthStore();
   const { settings } = useSettingsStore();
   const { setOrders } = useCartStore();
 
@@ -76,7 +80,7 @@ export default function Sidebar() {
     (typeof subscription?.daysRemaining === 'number' && subscription.daysRemaining <= 0);
 
   // Build the full nav list: Dashboard → order-creation item (mode-dependent) → rest
-  const orderNav = getOrderNavItem(settings?.businessMode, settings?.enablePosOrdering);
+  const orderNav = getOrderNavItem(settings?.businessMode, settings?.enablePosOrdering, settings);
   const navItems = [
     { screen: 'dashboard', label: 'Dashboard Overview', icon: LayoutDashboard },
     ...(orderNav ? [orderNav] : []),
@@ -86,6 +90,10 @@ export default function Sidebar() {
   const filteredNav = isExpired ? [] : navItems.filter((item) => {
     // Role-based permission check
     if (!canAccessScreen(userRole, item.screen)) return false;
+    // Per-staff screen permission (Part 23): role + module + individual
+    // UserPermission overrides. ADMIN/SUPER_ADMIN are never restricted.
+    const permKey = screenPermissionKey(item.screen);
+    if (permKey && staffPermissions && !hasStaffPermission(staffPermissions, permKey)) return false;
     // Business-mode applicability (e.g. POS Ordering is counter/hybrid only,
     // New Order is restaurant-only) — controlled by BUSINESS_MODE_SCREENS.
     if (!isScreenAllowedForBusinessMode(item.screen, settings.businessMode)) return false;

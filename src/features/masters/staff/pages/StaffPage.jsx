@@ -1,8 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Search, X, Edit, Trash, RefreshCw, AlertTriangle, Loader2, Key } from 'lucide-react';
+import { Plus, Search, X, Edit, Trash, RefreshCw, AlertTriangle, Loader2, Key, Shield, MapPin } from 'lucide-react';
 import { useUiStore } from '../../../../store';
 import { userApi } from '../../../../api/user.api';
+import { floorApi } from '../../../../api/floor.api';
 import ConfirmationDialog from '../../../../components/ConfirmationDialog';
+import StaffPermissionsModal from '../components/StaffPermissionsModal';
+import AssignFloorsModal from '../components/AssignFloorsModal';
+import { normalizeEmail, emailOptionalError } from '../../../../utils/email';
 
 const avatarColors = [
   'bg-[#16A34A] text-white', 'bg-[#06B6D4] text-white', 'bg-[#DCFCE7] text-emerald-900',
@@ -36,12 +40,22 @@ export default function StaffPage() {
 
   // Reset Password Modal
   const [showResetModal, setShowResetModal] = useState(false);
-  const [resetStaffMember, setResetStaffMember] = useState(null);
-  const [resetPass, setResetPass] = useState('');
+  const [resetStaffMember, setResetStaffMember] = useState(null);  const [resetPass, setResetPass] = useState('');
   const [resetPassConfirm, setResetPassConfirm] = useState('');
   const [resetPassError, setResetPassError] = useState('');
   const [resetPassSuccess, setResetPassSuccess] = useState('');
   const [resetPassSubmitting, setResetPassSubmitting] = useState(false);
+
+  // Staff Permissions Modal (Part 7)
+  const [permissionsMember, setPermissionsMember] = useState(null);
+  // Assign Floors Modal (Part 10)
+  const [floorsMember, setFloorsMember] = useState(null);
+  // Floor names + per-staff assignments shown as chips on the roster card (Part 10)
+  const [floorNames, setFloorNames] = useState({});
+  const [assignedFloorsByUser, setAssignedFloorsByUser] = useState({});
+  // Order-type assignment per user: null = unrestricted, [] = none selected,
+  // ['TAKEAWAY'] etc. Shown as a chip on the roster card.
+  const [orderTypesByUser, setOrderTypesByUser] = useState({});
 
   // Form
   const [firstName, setFirstName] = useState('');
@@ -56,6 +70,7 @@ export default function StaffPage() {
     if (!cachedStaff || now - cachedStaffFetched > CACHE_TTL) {
       loadStaff();
     }
+    loadFloorData();
   }, []);
 
   const loadStaff = async (showRetryToast = false) => {
@@ -89,10 +104,15 @@ export default function StaffPage() {
         initials: (u.name || 'U').charAt(0).toUpperCase(),
         avatarColor: getRandomColor(),
         phone: u.phone || '',
+        backendId: u.id,
+        backendRole: u.role,
       }));
       setStaff(mapped);
       cachedStaff = mapped;
       cachedStaffFetched = Date.now();
+      // Floor chips depend on the loaded roster (assignments are fetched per
+      // assignable staff member), so refresh them once the list is available.
+      loadFloorData();
       if (showRetryToast) {
         addToast('Staff data loaded successfully.', 'success');
       }
@@ -109,6 +129,61 @@ export default function StaffPage() {
     return map[role] || 'Service Staff';
   };
 
+  // Floor names + per-staff floor assignments (Part 10 roster chips) and the
+  // order-type assignment (Takeaway vs Dine In / Floor) shown as a chip.
+  // Only staff roles are assignable (MANAGER/CASHIER/KITCHEN/WAITER); ADMIN and
+  // SUPER_ADMIN never receive assignments, so they are skipped entirely.
+  const ASSIGNABLE_BACKEND_ROLES = ['MANAGER', 'CASHIER', 'WAITER', 'KITCHEN'];
+  const loadFloorData = async () => {
+    try {
+      const floorResp = await floorApi.getAll();
+      const floors = floorResp?.data?.floors || floorResp?.floors || [];
+      const nameById = {};
+      for (const f of floors) nameById[f.id] = f.name;
+      setFloorNames(nameById);
+    } catch (e) {
+      // Non-critical: roster still renders without floor chips
+    }
+    try {
+      const list = cachedStaff || [];
+      const assignable = list.filter((m) => ASSIGNABLE_BACKEND_ROLES.includes(m.backendRole));
+      if (assignable.length === 0) return;
+      const results = await Promise.all(
+        assignable.map(async (m) => {
+          try {
+            const resp = await userApi.getFloorAssignments(m.backendId);
+            return [
+              m.backendId,
+              resp?.data?.floorIds || resp?.floorIds || [],
+              Array.isArray(resp?.data?.assignedOrderTypes) ? resp.data.assignedOrderTypes : [],
+            ];
+          } catch (_) {
+            return [m.backendId, [], []];
+          }
+        })
+      );
+      setAssignedFloorsByUser(Object.fromEntries(results.map(([id, floors]) => [id, floors])));
+      setOrderTypesByUser(Object.fromEntries(results.map(([id, , ot]) => [id, ot])));
+    } catch (e) {
+      // Non-critical: roster still renders without chips
+    }
+  };
+
+  // Refresh the assignment chips after the Assign Floors modal saves.
+  const refreshAssignments = async (backendId) => {
+    try {
+      const resp = await userApi.getFloorAssignments(backendId);
+      setAssignedFloorsByUser((prev) => ({
+        ...prev,
+        [backendId]: resp?.data?.floorIds || resp?.floorIds || [],
+      }));
+      setOrderTypesByUser((prev) => ({
+        ...prev,
+        [backendId]: Array.isArray(resp?.data?.assignedOrderTypes) ? resp.data.assignedOrderTypes : [],
+      }));
+    } catch (_) { /* chips are non-critical */ }
+  };
+
   const mapRoleToBackend = (role) => {
     const map = { Admin: 'ADMIN', Manager: 'MANAGER', Cashier: 'CASHIER', 'Service Staff': 'WAITER', 'Kitchen Staff': 'KITCHEN' };
     return map[role] || 'WAITER';
@@ -122,12 +197,29 @@ export default function StaffPage() {
       const name = `${firstName} ${lastName}`.trim();
       if (editingId) {
         const id = parseInt(editingId.replace('staff-', ''));
-        await userApi.update(id, { name, role: mapRoleToBackend(role), phone });
+        // Part 3: email is editable in the Edit form. Backend (user.controller
+        // updateUser) validates format + tenant-level uniqueness and updates the
+        // SAME tenant User record (id preserved, no new user created).
+        const normalizedEmail = email ? normalizeEmail(email) : '';
+        const emailErr = normalizedEmail ? emailOptionalError(normalizedEmail) : null;
+        if (emailErr) { addToast(emailErr, 'error'); setSaving(false); return; }
+        await userApi.update(id, {
+          name,
+          role: mapRoleToBackend(role),
+          phone,
+          ...(normalizedEmail ? { email: normalizedEmail } : {}),
+        });
         addToast('Staff updated successfully.', 'success');
       } else {
+        // Canonical identity email (trim + lowercase) — same rule as every
+        // other creation path, so "Cashier@Restaurant.com" and
+        // "cashier@restaurant.com" are one account.
+        const normalizedEmail = email ? normalizeEmail(email) : `${firstName.toLowerCase()}.${lastName.toLowerCase()}@restaurant.com`;
+        const emailErr = emailOptionalError(normalizedEmail);
+        if (emailErr) { addToast(emailErr, 'error'); setSaving(false); return; }
         await userApi.create({
           name,
-          email: email || `${firstName.toLowerCase()}.${lastName.toLowerCase()}@restaurant.com`,
+          email: normalizedEmail,
           password: password || 'password123',
           role: mapRoleToBackend(role),
           phone,
@@ -242,7 +334,8 @@ export default function StaffPage() {
 
   const filteredStaff = staff.filter(s =>
     `${s.firstName} ${s.lastName}`.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    s.role.toLowerCase().includes(searchQuery.toLowerCase())
+    s.role.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    (s.email || '').toLowerCase().includes(searchQuery.toLowerCase())
   );
 
   return (
@@ -304,8 +397,34 @@ export default function StaffPage() {
                 <div className="min-w-0 flex-1">
                   <p className="text-xs font-extrabold text-slate-800 truncate">{member.firstName} {member.lastName}</p>
                   <p className="text-[9px] font-bold text-[#16A34A] uppercase tracking-wide">{member.role}</p>
+                  {member.email && <p className="text-[9px] text-slate-500 truncate" title={member.email}>{member.email}</p>}
+                  {member.phone && <p className="text-[9px] text-slate-500 truncate">📞 {member.phone}</p>}
                 </div>
               </div>
+              {/* Order access chip — Dine In is default; Takeaway is the grant */}
+              {ASSIGNABLE_BACKEND_ROLES.includes(member.backendRole) && orderTypesByUser[member.backendId] !== undefined && (
+                <div className="mt-2 flex items-center gap-1 flex-wrap">
+                  <span className="text-[9px] font-bold text-slate-400 uppercase">Order:</span>
+                  <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-slate-50 text-slate-600 border border-slate-100">
+                    Dine In
+                  </span>
+                  {(orderTypesByUser[member.backendId] || []).includes('TAKEAWAY') && (
+                    <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-100">
+                      + Takeaway
+                    </span>
+                  )}
+                </div>
+              )}
+              {/* Assigned floor chips (Part 10) — only for assignable staff roles */}
+              {ASSIGNABLE_BACKEND_ROLES.includes(member.backendRole) && (assignedFloorsByUser[member.backendId] || []).length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-1">
+                  {(assignedFloorsByUser[member.backendId] || []).map((fid) => (
+                    <span key={fid} className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-sky-50 text-sky-700 border border-sky-100">
+                      {floorNames[fid] || `Floor #${fid}`}
+                    </span>
+                  ))}
+                </div>
+              )}
               <div className="mt-2.5 pt-2.5 border-t border-slate-100 flex items-center justify-between">
                 <button onClick={() => handleToggleStatus(member.id, member.status)}
                   className={`text-[9px] font-bold px-2 py-0.5 rounded-full transition-all cursor-pointer ${
@@ -313,7 +432,14 @@ export default function StaffPage() {
                     member.status === 'On Break' ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-500'
                   }`}>{member.status}</button>
                 <div className="flex gap-1">
-                  <button onClick={() => { setEditingId(member.id); setFirstName(member.firstName); setLastName(member.lastName); setRole(member.role); setPhone(member.phone || ''); setShowModal(true); }}
+                  <button onClick={() => setPermissionsMember(member)}
+                    className="p-1 bg-slate-100 hover:bg-emerald-100 rounded text-slate-500 cursor-pointer" title="Permissions"><Shield className="w-3.5 h-3.5" /></button>
+                  {/* Assign Floors (Part 10) — ADMIN (restaurant-wide) and SUPER_ADMIN are not assignable */}
+                  {member.role !== 'ADMIN' && (
+                    <button onClick={() => setFloorsMember(member)}
+                      className="p-1 bg-slate-100 hover:bg-sky-100 rounded text-slate-500 cursor-pointer" title="Assign Floors"><MapPin className="w-3.5 h-3.5" /></button>
+                  )}
+                  <button onClick={() => { setEditingId(member.id); setFirstName(member.firstName); setLastName(member.lastName); setRole(member.role); setPhone(member.phone || ''); setEmail(member.email || ''); setShowModal(true); }}
                     className="p-1 bg-slate-100 hover:bg-emerald-100 rounded text-slate-500 cursor-pointer" title="Edit"><Edit className="w-3.5 h-3.5" /></button>
                   <button onClick={() => handleOpenReset(member)}
                     className="p-1 bg-slate-100 hover:bg-amber-100 rounded text-slate-500 cursor-pointer" title="Reset Password"><Key className="w-3.5 h-3.5" /></button>
@@ -497,17 +623,17 @@ export default function StaffPage() {
                   ))}
                 </select>
               </div>
+              {/* Part 3: Email is visible and editable in BOTH create and edit.
+                  Password is create-only — never exposed in the edit form. */}
+              <div className="space-y-1">
+                <label className="text-[9px] font-bold uppercase text-slate-400">Email</label>
+                <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} className="w-full h-8 px-2 bg-slate-50 border rounded-lg outline-none" />
+              </div>
               {!editingId && (
-                <>
-                  <div className="space-y-1">
-                    <label className="text-[9px] font-bold uppercase text-slate-400">Email</label>
-                    <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} className="w-full h-8 px-2 bg-slate-50 border rounded-lg outline-none" />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[9px] font-bold uppercase text-slate-400">Password</label>
-                    <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="w-full h-8 px-2 bg-slate-50 border rounded-lg outline-none" />
-                  </div>
-                </>
+                <div className="space-y-1">
+                  <label className="text-[9px] font-bold uppercase text-slate-400">Password</label>
+                  <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="w-full h-8 px-2 bg-slate-50 border rounded-lg outline-none" />
+                </div>
               )}
               <div className="space-y-1">
                 <label className="text-[9px] font-bold uppercase text-slate-400">Phone</label>
@@ -527,6 +653,23 @@ export default function StaffPage() {
       )}
 
       {/* Delete Staff Confirmation */}
+      {/* Staff Permissions Modal (Part 7) */}
+      {permissionsMember && (
+        <StaffPermissionsModal
+          member={permissionsMember}
+          onClose={() => setPermissionsMember(null)}
+        />
+      )}
+
+      {/* Assign Floors Modal (Part 10) */}
+      {floorsMember && (
+        <AssignFloorsModal
+          member={floorsMember}
+          onClose={() => setFloorsMember(null)}
+          onSaved={() => refreshAssignments(floorsMember.backendId)}
+        />
+      )}
+
       <ConfirmationDialog
         isOpen={!!deleteTarget}
         onClose={() => { if (!deleting) setDeleteTarget(null); }}
