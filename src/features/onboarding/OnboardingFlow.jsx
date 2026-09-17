@@ -92,6 +92,18 @@ export default function OnboardingFlow() {
     logout();
   };
 
+  // ── Return to Login (Part 2) ──
+  // An explicit exit from the wizard: clears the local wizard state and routes
+  // to the EXISTING login screen. It NEVER submits the current step — no form
+  // onSubmit is involved, no API call is made, no partial data is saved beyond
+  // what earlier completed steps already persisted server-side. The applicant
+  // can always resume later by logging in (the backend re-derives their stage).
+  const handleExitToLogin = () => {
+    useOnboardingStore.getState().clear();
+    setScreen('login');
+    logout();
+  };
+
   // ── First load spinner ──
   if (initialLoading || (loading && !payload && !error)) {
     return (
@@ -144,19 +156,21 @@ export default function OnboardingFlow() {
 
   const content = (() => {
     const done = () => setManualPage(null);
+    // Pre-submission wizard steps get the explicit login exit; status screens
+    // (pending/under_review/complete/blocked) already have their own controls.
     switch (page) {
       case 'business':
-        return <BusinessStep onBack={handleBack} onDone={done} />;
+        return <BusinessStep onBack={handleBack} onDone={done} onExitToLogin={handleExitToLogin} />;
       case 'documents':
-        return <DocumentsStep onBack={handleBack} onDone={done} />;
+        return <DocumentsStep onBack={handleBack} onDone={done} onExitToLogin={handleExitToLogin} />;
       case 'legal':
-        return <LegalStep onBack={handleBack} onDone={done} />;
+        return <LegalStep onBack={handleBack} onDone={done} onExitToLogin={handleExitToLogin} />;
       case 'plan':
-        return <PlanStep onBack={handleBack} onDone={done} />;
+        return <PlanStep onBack={handleBack} onDone={done} onExitToLogin={handleExitToLogin} />;
       case 'review':
         // Interactive REVIEW step — show the full application and let the
         // applicant submit it (no payment collected).
-        return <ReviewStep onBack={handleBack} onDone={done} />;
+        return <ReviewStep onBack={handleBack} onDone={done} onExitToLogin={handleExitToLogin} />;
       case 'pending':
         return <PendingStatus />;
       case 'under_review':

@@ -33,7 +33,7 @@ const STATUS_META = {
  * review/verify/reject is done by SUPER_ADMIN. To replace a rejected file the
  * applicant simply uploads another document.
  */
-export default function DocumentsStep({ onBack, onDone }) {
+export default function DocumentsStep({ onBack, onDone, onExitToLogin }) {
   const { payload, config } = useOnboardingStore();
   const [documents, setDocuments] = useState(() => payload?.documents || []);
   const [documentType, setDocumentType] = useState('');
@@ -250,6 +250,7 @@ export default function DocumentsStep({ onBack, onDone }) {
       </StepCard>
 
       <StepActions
+        onExitToLogin={onExitToLogin}
         onBack={onBack}
         onContinue={handleContinue}
         continueDisabled={!canContinue || continuing}

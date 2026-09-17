@@ -18,6 +18,7 @@ import AppLogo from '../../common/AppLogo';
 import { cn } from '../../../lib/utils';
 import { useAuthStore, useUiStore, useSettingsStore, useCartStore } from '../../../store';
 import { canAccessScreen, SCREEN_FEATURES, hasFeature, isScreenAllowedForBusinessMode, screenPermissionKey, hasStaffPermission } from '../../../utils/permissions';
+import { getBusinessCapabilities, catalogNaming } from '../../../utils/businessCapabilities';
 
 // Static sidebar items (order-creation entry is inserted dynamically per business mode)
 const navItemsBase = [
@@ -72,6 +73,12 @@ export default function Sidebar() {
 
   const userRole = (user?.role || '').toUpperCase();
 
+  // Centralized business capabilities (§12): one source drives hiding and
+  // labeling — no scattered businessType checks. Server-resolved when the
+  // settings API has responded; falls back to the local mirror otherwise.
+  const capabilities = settings?.capabilities || getBusinessCapabilities(settings?.businessType);
+  const catalogLabel = catalogNaming(settings?.businessType).catalogLabel;
+
   // When the subscription has expired the POS is locked server-side; hide the
   // module navigation so the sidebar matches the backend state (never only a
   // frontend hint — the API blocks these routes regardless).
@@ -84,7 +91,11 @@ export default function Sidebar() {
   const navItems = [
     { screen: 'dashboard', label: 'Dashboard Overview', icon: LayoutDashboard },
     ...(orderNav ? [orderNav] : []),
-    ...navItemsBase,
+    ...navItemsBase.map((item) =>
+      // Capability-driven terminology (§8): retail verticals see
+      // "Products & Stock" where food verticals see "Menu & Stock".
+      item.screen === 'menu' ? { ...item, label: catalogLabel } : item
+    ),
   ];
 
   const filteredNav = isExpired ? [] : navItems.filter((item) => {
@@ -97,6 +108,12 @@ export default function Sidebar() {
     // Business-mode applicability (e.g. POS Ordering is counter/hybrid only,
     // New Order is restaurant-only) — controlled by BUSINESS_MODE_SCREENS.
     if (!isScreenAllowedForBusinessMode(item.screen, settings.businessMode)) return false;
+    // Business-capability applicability (§7/§12): kitchen/tables screens are
+    // food-vertical features — never shown for retail business types, and the
+    // catalog item is renamed Menu ↔ Products via the capability map.
+    // (§8 audit fix: each screen checks its OWN capability, not kitchen's.)
+    if (item.screen === 'orders' && !capabilities.kitchen) return false;
+    if (item.screen === 'tables' && !capabilities.tables) return false;
     // Module visibility from POS Settings
     if (item.setting && settings[item.setting] === false) return false;
     // Plan feature access (hide modules not included in the subscription plan)

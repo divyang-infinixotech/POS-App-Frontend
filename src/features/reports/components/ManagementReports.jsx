@@ -3,6 +3,8 @@ import { Bar } from 'react-chartjs-2';
 import { Calendar, BarChart3, TrendingUp, ChefHat, DollarSign, ShoppingBag, CreditCard, Clock, FileText, AlertTriangle, Package } from 'lucide-react';
 import { formatCurrency, formatDate } from '../../../lib/utils';
 import ReportExportBar from '../../../components/common/ReportExportBar';
+import { useSettingsStore } from '../../../store';
+import { getBusinessCapabilities } from '../../../utils/businessCapabilities';
 
 const chartFont = { family: "'Inter', 'Segoe UI', sans-serif", size: 9 };
 const chartDefaults = { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } };
@@ -34,6 +36,10 @@ export default function ManagementReports({ dailyClosing, restaurantPerformance,
   const [subTab, setSubTab] = useState('dailyClosing');
   const fcVal = fc || formatCurrency;
   const fdVal = fd || formatDate;
+  // §4: the Kitchen card (Total/Completed/Pending/Cancelled KOTs) renders only
+  // for kitchen-capable businesses — retail sees the generic metrics only.
+  const { settings } = useSettingsStore();
+  const showKitchen = (settings.capabilities || getBusinessCapabilities(settings.businessType)).kitchen === true;
 
   if (loading) return null;
 
@@ -111,6 +117,8 @@ export default function ManagementReports({ dailyClosing, restaurantPerformance,
                   </div>
                 </div>
 
+                {/* §4: Kitchen KOT card — kitchen-capable businesses only */}
+                {showKitchen && (
                 <div className="bg-white rounded-[18px] border border-slate-200 p-4 shadow-xs">
                   <h4 className="text-[10px] font-extrabold text-slate-800 uppercase tracking-wider mb-3 flex items-center gap-1.5">
                     <ChefHat className="w-3.5 h-3.5 text-amber-600" /> Kitchen
@@ -122,13 +130,14 @@ export default function ManagementReports({ dailyClosing, restaurantPerformance,
                       { label: 'Pending', value: dcKitchen.pending || 0 },
                       { label: 'Cancelled', value: dcKitchen.cancelled || 0 },
                     ].map((k, i) => (
-                      <div key={i} className="bg-slate-50 rounded-xl p-2.5 border border-slate-100 text-center">
+                      <div className="bg-slate-50 rounded-xl p-2.5 border border-slate-100 text-center">
                         <p className="text-[9px] font-bold uppercase text-slate-400">{k.label}</p>
                         <p className="text-sm font-extrabold text-slate-800">{k.value}</p>
                       </div>
                     ))}
                   </div>
                 </div>
+                )}
               </div>
 
               {dcTopItems.length > 0 && (

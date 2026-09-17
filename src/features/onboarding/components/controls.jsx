@@ -1,5 +1,5 @@
 import React from 'react';
-import { Loader2, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Loader2, ChevronLeft, ChevronRight, LogIn } from 'lucide-react';
 import { cn } from '../../../lib/utils';
 
 /* ─── Text / email / phone input ─────────────────────────────────────────── */
@@ -53,10 +53,10 @@ export function Select({ label, error, required, children, className, ...props }
 }
 
 /* ─── Bottom action bar (Back / primary Continue) ───────────────────────── */
-export function StepActions({ onBack, backDisabled, onContinue, continueDisabled, loading, continueLabel = 'Continue', children }) {
+export function StepActions({ onBack, backDisabled, onContinue, continueDisabled, loading, continueLabel = 'Continue', children, onExitToLogin }) {
   return (
     <div className="flex items-center justify-between gap-3 mt-6 pt-5 border-t border-slate-100">
-      <div>
+      <div className="flex items-center">
         {onBack && (
           <button
             type="button"
@@ -65,6 +65,15 @@ export function StepActions({ onBack, backDisabled, onContinue, continueDisabled
             className="h-10 px-4 bg-white border border-slate-200 text-slate-600 rounded-xl text-xs font-bold hover:bg-slate-50 transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed inline-flex items-center gap-1.5"
           >
             <ChevronLeft className="w-3.5 h-3.5" /> Back
+          </button>
+        )}
+        {onExitToLogin && (
+          <button
+            type="button"
+            onClick={onExitToLogin}
+            className="ml-2 h-10 px-4 bg-white border border-slate-200 text-slate-500 rounded-xl text-xs font-bold hover:bg-slate-50 hover:text-slate-700 transition-all cursor-pointer inline-flex items-center gap-1.5"
+          >
+            <LogIn className="w-3.5 h-3.5" /> Return to Login
           </button>
         )}
       </div>

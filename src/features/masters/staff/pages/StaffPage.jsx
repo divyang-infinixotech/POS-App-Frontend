@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, Search, X, Edit, Trash, RefreshCw, AlertTriangle, Loader2, Key, Shield, MapPin } from 'lucide-react';
-import { useUiStore } from '../../../../store';
+import { useUiStore, useSettingsStore } from '../../../../store';
 import { userApi } from '../../../../api/user.api';
 import { floorApi } from '../../../../api/floor.api';
 import ConfirmationDialog from '../../../../components/ConfirmationDialog';
 import StaffPermissionsModal from '../components/StaffPermissionsModal';
 import AssignFloorsModal from '../components/AssignFloorsModal';
 import { normalizeEmail, emailOptionalError } from '../../../../utils/email';
+import { getBusinessCapabilities } from '../../../../utils/businessCapabilities';
 
 const avatarColors = [
   'bg-[#16A34A] text-white', 'bg-[#06B6D4] text-white', 'bg-[#DCFCE7] text-emerald-900',
@@ -28,6 +29,9 @@ let staffLoadInFlight = false;
 
 export default function StaffPage() {
   const { addToast } = useUiStore();
+  // §5: floor/order-mode assignments only apply to table-capable businesses.
+  const { settings } = useSettingsStore();
+  const showFloorAccess = (settings.capabilities || getBusinessCapabilities(settings.businessType)).tables === true;
   const [staff, setStaff] = useState(cachedStaff || []);
   const [loading, setLoading] = useState(!cachedStaff);
   const [error, setError] = useState(null);
@@ -434,8 +438,9 @@ export default function StaffPage() {
                 <div className="flex gap-1">
                   <button onClick={() => setPermissionsMember(member)}
                     className="p-1 bg-slate-100 hover:bg-emerald-100 rounded text-slate-500 cursor-pointer" title="Permissions"><Shield className="w-3.5 h-3.5" /></button>
-                  {/* Assign Floors (Part 10) — ADMIN (restaurant-wide) and SUPER_ADMIN are not assignable */}
-                  {member.role !== 'ADMIN' && (
+                  {/* Assign Floors (Part 10) — ADMIN (restaurant-wide) and SUPER_ADMIN are not assignable.
+                      §5: hidden entirely for non-table (retail) businesses. */}
+                  {member.role !== 'ADMIN' && showFloorAccess && (
                     <button onClick={() => setFloorsMember(member)}
                       className="p-1 bg-slate-100 hover:bg-sky-100 rounded text-slate-500 cursor-pointer" title="Assign Floors"><MapPin className="w-3.5 h-3.5" /></button>
                   )}

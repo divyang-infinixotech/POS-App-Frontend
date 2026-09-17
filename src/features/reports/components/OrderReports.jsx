@@ -3,12 +3,17 @@ import { Bar, Doughnut } from 'react-chartjs-2';
 import { formatCurrency, formatDate, formatTime } from '../../../lib/utils';
 import { ShoppingBag, CheckCircle, Clock, XCircle, Timer, BarChart3, Search, ChevronLeft, ChevronRight } from 'lucide-react';
 import ReportExportBar from '../../../components/common/ReportExportBar';
+import { useSettingsStore } from '../../../store';
+import { getBusinessCapabilities } from '../../../utils/businessCapabilities';
 
 const chartFont = { family: "'Inter', 'Segoe UI', sans-serif", size: 9 };
 const chartDefaults = { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { titleFont: chartFont, bodyFont: { ...chartFont, size: 10 } } } };
 const STATUS_COLORS = { COMPLETED: '#16A34A', PREPARING: '#2563EB', READY: '#D97706', PENDING: '#64748B', CANCELLED: '#DC2626' };
 
 export default function OrderReports({ orderReportData, cancellationData, loading, formatCurrency: fc, formatDate: fd, formatTime: ft }) {
+  // §9: kitchen terminology only for kitchen-capable businesses
+  const { settings } = useSettingsStore();
+  const isKitchenBusiness = (settings.capabilities || getBusinessCapabilities(settings.businessType)).kitchen === true;
   const [subTab, setSubTab] = useState('register');
   const [orderPage, setOrderPage] = useState(1);
   const orderPageSize = 10;
@@ -84,7 +89,8 @@ export default function OrderReports({ orderReportData, cancellationData, loadin
           { label: 'Completed', value: orderStatusSummary.COMPLETED, icon: CheckCircle, color: 'border-emerald-200', textColor: 'text-[#16A34A]' },
           { label: 'Pending', value: orderStatusSummary.PENDING, icon: Clock, color: 'border-slate-200', textColor: 'text-slate-600' },
           { label: 'Cancelled', value: orderStatusSummary.CANCELLED, icon: XCircle, color: 'border-red-200', textColor: 'text-red-600' },
-          { label: 'Kitchen', value: orderStatusSummary.PREPARING + orderStatusSummary.READY, icon: Timer, color: 'border-blue-200', textColor: 'text-blue-600' },
+          // §9: "Kitchen" is food terminology — retail sees the neutral "In Progress"
+          { label: isKitchenBusiness ? 'Kitchen' : 'In Progress', value: orderStatusSummary.PREPARING + orderStatusSummary.READY, icon: Timer, color: 'border-blue-200', textColor: 'text-blue-600' },
         ].map((kpi, idx) => (
           <div key={idx} className={`bg-white rounded-[18px] border ${kpi.color} p-4 shadow-xs`}>
             <div className="flex items-center justify-between mb-2">

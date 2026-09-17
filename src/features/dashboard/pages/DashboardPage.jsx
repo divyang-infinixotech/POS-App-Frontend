@@ -4,6 +4,7 @@ import { useSocketEvent } from '../../../hooks/useSocket';
 import { dashboardApi } from '../../../api/dashboard.api';
 import { formatCurrency } from '../../../lib/utils';
 import { PLACEHOLDER_IMAGE } from '../../../lib/imagePlaceholder';
+import { getBusinessCapabilities } from '../../../utils/businessCapabilities';
 import {
   TrendingUp,
   ShoppingBag,
@@ -31,6 +32,13 @@ export default function DashboardPage() {
   const { user, subscription } = useAuthStore();
   const { settings } = useSettingsStore();
   const { refreshTrigger, setScreen } = useUiStore();
+  // Centralized capability check (§1): every food-specific surface on the
+  // dashboard (Kitchen Queue KPI/card, Table Occupancy, restaurant wording)
+  // is gated on the SERVER-RESOLVED business capabilities — never a local
+  // businessType === 'RESTAURANT' check.
+  const capabilities = settings.capabilities || getBusinessCapabilities(settings.businessType);
+  const showKitchen = capabilities.kitchen === true;
+  const showTables = capabilities.tables === true;
   const [warningDismissed, setWarningDismissed] = useState(() => {
     try { return sessionStorage.getItem(SESSION_DISMISS_KEY) === '1'; } catch { return false; }
   });
@@ -223,6 +231,15 @@ export default function DashboardPage() {
   // active-staff count (never a fabricated "on shift" ratio).
   const activeOrdersCount = Number(data?.activeOrders ?? 0);
   const todaySales = Number(data?.todaySales ?? 0);
+  const todayOrdersCount = Number(data?.totalOrders ?? 0);
+
+  // KPI #2 is capability-driven (§4): kitchen businesses show live "Active
+  // Orders" (orders being prepared); counter-sale businesses (no kitchen)
+  // have no in-progress kitchen state, so they show today's order count
+  // instead. Same card slot, same card style — no layout branch.
+  const activeOrdersKpi = showKitchen
+    ? { label: 'Active Orders', value: activeOrdersCount }
+    : { label: "Today's Orders", value: todayOrdersCount };
 
   const kpis = [
     {
@@ -230,13 +247,20 @@ export default function DashboardPage() {
       icon: TrendingUp, color: 'text-emerald-600', bg: 'bg-emerald-50', border: 'border-emerald-200',
     },
     {
-      label: 'Active Orders', value: activeOrdersCount,
+      label: activeOrdersKpi.label, value: activeOrdersKpi.value,
       icon: ShoppingBag, color: 'text-orange-600', bg: 'bg-orange-50', border: 'border-orange-200',
     },
-    {
+    // Kitchen Queue KPI only for kitchen businesses (§1); retail keeps the
+    // 4-card grid by showing This Month's Sales in the third slot instead —
+    // the value is already returned by the same consolidated dashboard call
+    // (sales.monthlySales) so no extra API is needed.
+    ...(showKitchen ? [{
       label: 'Kitchen Queue', value: Number(data?.kitchenQueueCount ?? kitchenOrders.length),
       icon: ChefHat, color: 'text-blue-600', bg: 'bg-blue-50', border: 'border-blue-200',
-    },
+    }] : [{
+      label: "This Month's Sales", value: formatCurrency(Number(data?.monthlySales ?? 0)),
+      icon: TrendingUp, color: 'text-blue-600', bg: 'bg-blue-50', border: 'border-blue-200',
+    }]),
     {
       label: 'Active Staff', value: Number(data?.staffOnShift ?? 0),
       icon: Clock, color: 'text-purple-600', bg: 'bg-purple-50', border: 'border-purple-200',
@@ -265,7 +289,7 @@ export default function DashboardPage() {
           <h2 className="text-lg font-extrabold text-[#191c1e]">
             Good {new Date().getHours() < 12 ? 'Morning' : new Date().getHours() < 17 ? 'Afternoon' : 'Evening'}, {user?.firstName || 'User'}
           </h2>
-          <p className="text-[11px] text-slate-500 font-medium">Here's your restaurant overview for today</p>
+          <p className="text-[11px] text-slate-500 font-medium">Here's your {capabilities.food === true ? 'restaurant' : 'business'} overview for today</p>
         </div>
         <div className="flex items-center gap-2">
           {/* Notifications Bell */}
@@ -344,7 +368,7 @@ export default function DashboardPage() {
           <div className="flex flex-wrap gap-2 mt-1.5">
             {notifications.slice(0, 3).map(n => (
               <span key={n.id} className="inline-flex items-center gap-1 text-[10px] font-semibold bg-white border border-amber-100 rounded-lg px-2 py-1 text-amber-700">
-                <UtensilsCrossed className="w-3 h-3" /> {n.message}
+                {showKitchen ? <UtensilsCrossed className="w-3 h-3" /> : <ShoppingBag className="w-3 h-3" />} {n.message}
               </span>
             ))}
           </div>
@@ -368,9 +392,10 @@ export default function DashboardPage() {
 
       {/* Main Two-Column Layout */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        {/* Left: Kitchen Queue + Recent Orders */}
         <div className="lg:col-span-2 space-y-4">
-          {/* Kitchen Queue */}
+          {/* Kitchen Queue — kitchen businesses only (§1); the card is removed
+              entirely for retail so no empty "No pending kitchen orders" box shows. */}
+          {showKitchen && (
           <div className="bg-white rounded-[18px] border border-slate-200 p-4 shadow-xs">
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-xs font-extrabold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
@@ -401,11 +426,67 @@ export default function DashboardPage() {
               <div className="text-center py-6 text-slate-400 text-xs italic">No pending kitchen orders.</div>
             )}
           </div>
+          )}
+
+          {/* Sales Summary — counter-sale businesses (no Kitchen Queue card)
+              use this slot to keep the left column visually balanced. It
+              renders ONLY data already returned by the same consolidated
+              dashboard call (hourlySales + monthlySales) — no new API, no
+              fabricated figures. Kitchen businesses keep the Kitchen Queue
+              card instead (§7 — restaurant layout unchanged). */}
+          {!showKitchen && (() => {
+            const series = Array.isArray(data?.salesByHour) ? data.salesByHour : [];
+            const hasSales = series.some((s) => Number(s.value ?? 0) > 0);
+            const maxVal = Math.max(1, ...series.map((s) => Number(s.value ?? 0)));
+            return (
+              <div className="bg-white rounded-[18px] border border-slate-200 p-4 shadow-xs">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-xs font-extrabold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                    <TrendingUp className="w-4 h-4 text-[#16A34A]" /> Sales Summary
+                  </h3>
+                  <span className="text-[10px] font-bold text-slate-400">
+                    {formatCurrency(Number(data?.monthlySales ?? 0))} this month
+                  </span>
+                </div>
+                {hasSales ? (
+                  <div>
+                    <div className="flex items-end gap-1 h-24" role="img" aria-label="Sales by hour today">
+                      {series.map((s, i) => {
+                        const v = Number(s.value ?? 0);
+                        const h = Math.max(4, Math.round((v / maxVal) * 100));
+                        return (
+                          <div key={i} className="flex-1 flex flex-col items-center justify-end h-full min-w-0"
+                            title={`${s.label || s.hour}: ${formatCurrency(v)}`}>
+                            <div
+                              className={`w-full rounded-t-md transition-all ${v > 0 ? 'bg-[#16A34A]/75 hover:bg-[#16A34A]' : 'bg-slate-100'}`}
+                              style={{ height: `${v > 0 ? h : 4}%` }}
+                            />
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div className="flex justify-between mt-1.5 text-[9px] font-bold text-slate-400">
+                      <span>12 AM</span>
+                      <span>6 AM</span>
+                      <span>12 PM</span>
+                      <span>6 PM</span>
+                      <span>11 PM</span>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-center py-6 text-slate-400 text-xs italic">
+                    No sales recorded today yet.
+                  </div>
+                )}
+              </div>
+            );
+          })()}
 
           {/* Top Selling Items */}
-          {data?.topSellingItems?.length > 0 && (
-            <div className="bg-white rounded-[18px] border border-slate-200 p-4 shadow-xs">
-              <h3 className="text-xs font-extrabold text-slate-800 mb-3 uppercase tracking-wider">Top Selling Items</h3>
+          <div className="bg-white rounded-[18px] border border-slate-200 p-4 shadow-xs">
+            <h3 className="text-xs font-extrabold text-slate-800 mb-3 uppercase tracking-wider">{showKitchen ? 'Top Selling Items' : 'Top Selling Products'}</h3>
+            {data?.topSellingItems?.length > 0 ? (
+            <>
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
                 {data.topSellingItems.slice(0, 6).map((item, idx) => (
                   <div key={idx} className="flex items-center gap-3 p-2.5 border border-slate-100 rounded-xl hover:border-[#16A34A] transition-all">
@@ -421,11 +502,25 @@ export default function DashboardPage() {
                   </div>
                 ))}
               </div>
-            </div>
-          )}
+            </>
+            ) : (
+              <div className="text-center py-6 text-slate-400 text-xs italic">
+                No sales recorded today yet — top {showKitchen ? 'items' : 'products'} will appear here after the first sale.
+              </div>
+            )}
+          </div>
 
           {/* Recent Orders */}
-          {recentOrders.length > 0 && (
+          {recentOrders.length === 0 ? (
+            <div className="bg-white rounded-[18px] border border-slate-200 shadow-xs overflow-hidden">
+              <div className="px-4 py-3 border-b border-slate-100 flex justify-between items-center">
+                <h3 className="text-xs font-extrabold text-slate-800">Recent Orders</h3>
+              </div>
+              <div className="text-center py-6 text-slate-400 text-xs italic">
+                No orders yet today — new orders will appear here.
+              </div>
+            </div>
+          ) : (
             <div className="bg-white rounded-[18px] border border-slate-200 shadow-xs overflow-hidden">
               <div className="px-4 py-3 border-b border-slate-100 flex justify-between items-center">
                 <h3 className="text-xs font-extrabold text-slate-800">Recent Orders</h3>
@@ -436,7 +531,7 @@ export default function DashboardPage() {
                   <thead className="bg-slate-50">
                     <tr>
                       <th className="text-left py-2.5 px-3 text-[10px] font-bold uppercase text-slate-500">Order</th>
-                      <th className="text-left py-2.5 px-3 text-[10px] font-bold uppercase text-slate-500">Table</th>
+                      {showTables && <th className="text-left py-2.5 px-3 text-[10px] font-bold uppercase text-slate-500">Table</th>}
                       <th className="text-right py-2.5 px-3 text-[10px] font-bold uppercase text-slate-500">Total</th>
                       <th className="text-right py-2.5 px-3 text-[10px] font-bold uppercase text-slate-500">Status</th>
                     </tr>
@@ -445,7 +540,7 @@ export default function DashboardPage() {
                     {recentOrders.slice(0, 5).map((ro, idx) => (
                       <tr key={ro.id || idx} className="border-b border-slate-50 hover:bg-slate-50">
                         <td className="py-2.5 px-3 font-bold text-slate-700 font-mono">{ro.orderNumber || `#${ro.id}`}</td>
-                        <td className="py-2.5 px-3 text-slate-600">{ro.tableName || `Table ${ro.tableId}`}</td>
+                        {showTables && <td className="py-2.5 px-3 text-slate-600">{ro.tableName || `Table ${ro.tableId}`}</td>}
                         <td className="py-2.5 px-3 text-right font-mono font-bold text-slate-800">{formatCurrency(ro.total || ro.amount || 0)}</td>
                         <td className="py-2.5 px-3 text-right">
                           <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full ${
@@ -489,10 +584,12 @@ export default function DashboardPage() {
           <div className="bg-white rounded-[18px] border border-slate-200 p-4 shadow-xs">
             <h3 className="text-xs font-extrabold text-slate-800 mb-3 uppercase tracking-wider">Quick Summary</h3>
             <div className="space-y-2 text-xs">
-              <div className="flex justify-between font-semibold text-slate-600">
-                <span>Table Occupancy</span>
-                <span className="font-bold">{Math.round((Number(data?.tableOccupancy ?? 0) / Math.max(Number(data?.totalTables ?? 0), 1)) * 100)}%</span>
-              </div>
+              {showTables && (
+                <div className="flex justify-between font-semibold text-slate-600">
+                  <span>Table Occupancy</span>
+                  <span className="font-bold">{Math.round((Number(data?.tableOccupancy ?? 0) / Math.max(Number(data?.totalTables ?? 0), 1)) * 100)}%</span>
+                </div>
+              )}
               <div className="flex justify-between font-semibold text-slate-600">
                 <span>Business Date</span>
                 <span className="font-bold">{new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</span>

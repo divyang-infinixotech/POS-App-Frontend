@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Plus, Search, RefreshCw, Edit, Trash, X, Leaf, Beef, Barcode, Package, AlertTriangle, Check, Info, AlertCircle, Eye, EyeOff, Image as ImageIcon, Upload, Camera } from 'lucide-react';
 import { useSettingsStore, useUiStore } from '../../../../store';
+import { getBusinessCapabilities, catalogNaming } from '../../../../utils/businessCapabilities';
 import { menuApi } from '../../../../api/menu.api';
 import { categoryApi } from '../../../../api/category.api';
 import { useSocketEvent } from '../../../../hooks/useSocket';
@@ -136,6 +137,18 @@ export default function MenuPage() {
   // Restaurant dietary mode (Part 16): VEG_ONLY restaurants can only create
   // VEG items — the Non-Veg option is hidden entirely (backend enforces too).
   const restaurantVegOnly = (settings.dietaryMode || 'VEG_AND_NON_VEG') === 'VEG_ONLY';
+  // Centralized capability check (§9/§10): the dietary filter and veg/non-veg
+  // indicators only exist for food verticals. Non-food businesses (retail)
+  // get a clean product UI — the DB fields stay but are never surfaced.
+  const isDietaryBusiness = (settings.capabilities || getBusinessCapabilities(settings.businessType)).dietary === true;
+  // Full capability set (§2): the Add/Edit form itself is capability-driven —
+  // retail tenants get Product Name / no Veg-Non-Veg / no Prep Time, food
+  // tenants keep the existing form. catalogNaming() drives the terminology.
+  const menuCapabilities = settings.capabilities || getBusinessCapabilities(settings.businessType);
+  const isKitchenBusiness = menuCapabilities.kitchen === true;
+  const showBarcodeField = menuCapabilities.barcode === true;
+  const naming = catalogNaming(settings.businessType);
+  const isStockBusiness = menuCapabilities.stock === true;
   const [itemSku, setItemSku] = useState('');
   const [itemBarcode, setItemBarcode] = useState('');
   const [itemPrepTime, setItemPrepTime] = useState(10);
@@ -420,7 +433,7 @@ export default function MenuPage() {
       return;
     }
     if (!itemName || !itemName.trim()) {
-      addToast('Please enter a dish name', 'error');
+      addToast(isDietaryBusiness ? 'Please enter a dish name' : 'Please enter a product name', 'error');
       return;
     }
     if (itemPrice === '' || itemPrice == null || toNumber(itemPrice) <= 0) {
@@ -443,6 +456,8 @@ export default function MenuPage() {
     try {
       // Part 16: a VEG_ONLY restaurant can only ever submit VEG items.
       const effectiveVeg = restaurantVegOnly ? true : itemVeg;
+      // §2: the submitted payload must also be capability-aware — dietary and
+      // prep fields are omitted entirely for non-food tenants (not just hidden).
       const payload = {
         name: itemName.trim(),
         price: toNumber(itemPrice),
@@ -450,15 +465,16 @@ export default function MenuPage() {
         image: itemImage,
         imagePublicId: itemImagePublicId,
         isAvailable: itemLive,
-        isVeg: effectiveVeg,
-        dietaryType: effectiveVeg ? 'VEG' : 'NON_VEG',
+        ...(isDietaryBusiness ? {
+          isVeg: effectiveVeg,
+          dietaryType: effectiveVeg ? 'VEG' : 'NON_VEG',
+        } : {}),
         subcategoryId: itemSubcategoryId ? parseInt(itemSubcategoryId) : null,
         sku: itemSku.trim() || `SKU-${Date.now()}`,
-        barcode: itemBarcode,
-        preparationTime: toNumber(itemPrepTime),
-        currentStock: toNumber(itemStockQty),
+        ...(showBarcodeField ? { barcode: itemBarcode } : {}),
+        ...(isKitchenBusiness ? { preparationTime: toNumber(itemPrepTime), kitchenCategory: itemKitchenCategory } : {}),
+        ...(isStockBusiness ? { currentStock: toNumber(itemStockQty) } : {}),
         gstPercentage: toNumber(itemTax),
-        kitchenCategory: itemKitchenCategory,
         categoryId,
       };
 
@@ -718,14 +734,17 @@ export default function MenuPage() {
         </div>
       )}
 
-      {/* LEVEL 3 — Search & dietary filter (below both tab rows, Part 1 req. 12) */}
+      {/* LEVEL 3 — Search & dietary filter (below both tab rows, Part 1 req. 12).
+          Dietary dropdown only for food businesses (§9). */}
       <div className="flex flex-wrap items-center gap-2 w-full">
+        {isDietaryBusiness && (
         <select value={filterDietary} onChange={(e) => setFilterDietary(e.target.value)}
           className="h-10 px-2 bg-white border border-slate-200 rounded-xl text-[10px] font-bold outline-none focus:border-[#16A34A] cursor-pointer shrink-0">
           <option value="All">Veg + Non-Veg</option>
           <option value="VEG">Veg Only</option>
           <option value="NON_VEG">Non-Veg Only</option>
         </select>
+        )}
         <div className="relative w-full sm:w-[300px] sm:min-w-[260px] sm:flex-shrink-0">
           <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
           <input type="text" placeholder="Search menu items..." value={searchQuery}
@@ -759,11 +778,13 @@ export default function MenuPage() {
                 <div className="relative h-24 rounded-lg overflow-hidden border border-slate-200">
                   <img src={item.image} alt={item.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" loading="lazy" decoding="async"
                     onError={(e) => { e.target.src = PLACEHOLDER_IMAGE; }} />
+                  {isDietaryBusiness && (
                   <span className={`absolute top-1.5 left-1.5 w-4 h-4 rounded-sm border-2 flex items-center justify-center ${
                     item.isVeg ? 'border-emerald-600 bg-emerald-50' : 'border-red-600 bg-red-50'
                   }`}>
                     <span className={`w-2 h-2 rounded-full ${item.isVeg ? 'bg-emerald-600' : 'bg-red-600'}`} />
                   </span>
+                  )}
                   <span className="absolute top-1.5 right-1.5 bg-slate-900/80 text-white font-mono text-[9px] font-bold px-1.5 py-0.5 rounded">{currency}{item.price}</span>
                   <span className={`absolute bottom-1.5 right-1.5 text-[8px] font-bold px-1.5 py-0.5 rounded shadow ${
                     item.stockStatus === 'Available' ? 'bg-emerald-500 text-white' :
@@ -776,16 +797,16 @@ export default function MenuPage() {
                   <div className="flex justify-between items-start gap-1">
                     <p className="text-xs font-extrabold text-slate-800 truncate flex items-center gap-1">
                       {item.name}
-                      {item.isVeg ? (
+                      {isDietaryBusiness && (item.isVeg ? (
                         <Leaf className="w-3 h-3 text-emerald-600 shrink-0" />
                       ) : (
                         <Beef className="w-3 h-3 text-red-600 shrink-0" />
-                      )}
+                      ))}
                     </p>
                     <span className="text-[9px] font-bold text-[#16A34A] uppercase font-mono shrink-0">{item.category}{item.subcategoryName ? ` › ${item.subcategoryName}` : ''}</span>
                   </div>
                   <p className="text-[9px] text-slate-400 font-medium mt-1">
-                    SKU: {item.sku} {item.prepTime && `· Prep: ${item.prepTime}m`}
+                    SKU: {item.sku} {isKitchenBusiness && item.prepTime && `· Prep: ${item.prepTime}m`}
                   </p>
                   <p className="text-[10px] text-slate-400 font-medium leading-relaxed truncate mt-0.5">{item.description || 'No description.'}</p>
                 </div>
@@ -1099,13 +1120,13 @@ export default function MenuPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs">
           <div className="bg-white w-full max-w-md rounded-xl shadow-xl border border-slate-100 max-h-[90vh] overflow-y-auto">
             <div className="px-4 py-3 bg-slate-50 border-b border-slate-100 flex justify-between items-center sticky top-0 z-10">
-              <h4 className="font-extrabold text-xs uppercase tracking-wider text-slate-800">{editingId ? 'Edit Menu Item' : 'Add Menu Item'}</h4>
+              <h4 className="font-extrabold text-xs uppercase tracking-wider text-slate-800">{editingId ? `Edit ${naming.itemLabel.replace(/s$/, '')}` : `Add ${naming.itemLabel.replace(/s$/, '')}`}</h4>
               <button onClick={() => setShowModal(false)} className="text-slate-400 hover:text-slate-600 cursor-pointer"><X className="w-4 h-4" /></button>
             </div>
             <form onSubmit={handleSubmit} className="p-4 space-y-3.5 text-xs">
               {/* Basic Info */}
               <div className="space-y-1">
-                <label className="text-[9px] font-bold uppercase text-slate-400">Dish Name *</label>
+                <label className="text-[9px] font-bold uppercase text-slate-400">{isDietaryBusiness ? 'Dish Name' : 'Product Name'} *</label>
                 <input type="text" value={itemName} onChange={(e) => setItemName(e.target.value)}
                   className="w-full h-8 px-2 bg-slate-50 border rounded-lg outline-none focus:border-[#16A34A]" required />
               </div>
@@ -1142,23 +1163,26 @@ export default function MenuPage() {
                   className="w-full h-8 px-2 bg-slate-50 border rounded-lg outline-none" />
               </div>
 
-              {/* SKU & Barcode */}
+              {/* SKU & Barcode (§2) — barcode input only for barcode-capable businesses */}
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1">
                   <label className="text-[9px] font-bold uppercase text-slate-400">SKU</label>
                   <input type="text" value={itemSku} onChange={(e) => setItemSku(e.target.value)}
                     placeholder="Auto-generated" className="w-full h-8 px-2 bg-slate-50 border rounded-lg outline-none font-mono text-[10px]" />
                 </div>
+                {showBarcodeField && (
                 <div className="space-y-1">
                   <label className="text-[9px] font-bold uppercase text-slate-400">Barcode (Optional)</label>
                   <input type="text" value={itemBarcode} onChange={(e) => setItemBarcode(e.target.value)}
                     placeholder="e.g. 8901234567890" className="w-full h-8 px-2 bg-slate-50 border rounded-lg outline-none font-mono text-[10px]" />
                   <p className="text-[8px] text-slate-400">Scannable in POS when the plan includes the Barcode Scanner.</p>
                 </div>
+                )}
               </div>
 
-              {/* Veg/Non-Veg Type (Kitchen Section removed from dialog) */}
-              <div className="space-y-1">
+              {/* Veg/Non-Veg Type — dietary businesses only (§2). Retail has no
+                  dietary concept, so the whole selector disappears. */}
+              {isDietaryBusiness && (<div className="space-y-1">
                 <label className="text-[9px] font-bold uppercase text-slate-400">Type</label>
                 {restaurantVegOnly && (
                   <p className="text-[9px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-2 py-1">
@@ -1181,20 +1205,24 @@ export default function MenuPage() {
                     </button>
                   )}
                 </div>
-              </div>
+              </div>) }
 
-              {/* Preparation Time & Stock */}
+              {/* Prep Time (kitchen businesses only) & Stock (§2) */}
               <div className="grid grid-cols-2 gap-3">
+                {isKitchenBusiness && (
                 <div className="space-y-1">
                   <label className="text-[9px] font-bold uppercase text-slate-400">Prep Time (min)</label>
                   <input type="number" inputMode="numeric" value={itemPrepTime} onChange={(e) => setItemPrepTime(sanitizeNumeric(e.target.value))}
                     className="no-spinner w-full h-8 px-2 bg-slate-50 border rounded-lg outline-none" />
                 </div>
+                )}
+                {isStockBusiness && (
                 <div className="space-y-1">
                   <label className="text-[9px] font-bold uppercase text-slate-400">Stock Quantity</label>
                   <input type="number" inputMode="numeric" value={itemStockQty} onChange={(e) => setItemStockQty(sanitizeNumeric(e.target.value))}
                     className="no-spinner w-full h-8 px-2 bg-slate-50 border rounded-lg outline-none" />
                 </div>
+                )}
               </div>
 
               {/* Tax & GST */}

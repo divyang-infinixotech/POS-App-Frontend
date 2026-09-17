@@ -12,11 +12,8 @@ const SETTING_FIELDS = [
   { key: 'default_trial_days', label: 'Default Trial Days', type: 'number', default: 15 },
   { key: 'maintenance_mode', label: 'Maintenance Mode', type: 'boolean', default: false },
   { key: 'max_file_upload_mb', label: 'Max File Upload (MB)', type: 'number', default: 5 },
-  { key: 'smtp_host', label: 'SMTP Host', type: 'text', default: '' },
-  { key: 'smtp_port', label: 'SMTP Port', type: 'number', default: 587 },
-  { key: 'smtp_user', label: 'SMTP Username', type: 'text', default: '' },
-  { key: 'smtp_pass', label: 'SMTP Password', type: 'password', default: '' },
-  { key: 'smtp_from_email', label: 'SMTP From Email', type: 'text', default: '' },
+  // SMTP host/port/user/pass/from removed — the dedicated "Email (Microsoft
+  // Graph) Configuration" section below is the single email config surface.
   { key: 'payment_gateway', label: 'Payment Gateway', type: 'select', options: ['RAZORPAY', 'CASHFREE', 'PHONEPE', 'PAYTM', 'STRIPE', 'NONE'], default: 'NONE' },
   { key: 'razorpay_key', label: 'Razorpay Key', type: 'text', default: '' },
   { key: 'razorpay_secret', label: 'Razorpay Secret', type: 'password', default: '' },
@@ -97,15 +94,17 @@ export default function SystemSettings() {
     }
   };
 
+  // Connection check — message reflects the ACTIVE transport (backend decides;
+  // Graph mode verifies config + token acquisition, never sends mail).
   const handleVerifySmtp = async () => {
     if (emailTesting) return;
     setEmailTesting(true);
     try {
       const resp = await superAdminApi.verifyEmailSettings();
       const data = resp?.data || resp || {};
-      showToast(data.ok ? 'SMTP connection verified successfully.' : (data.error || 'SMTP verification failed.'), data.ok ? 'success' : 'error');
+      showToast(data.ok ? 'Email transport verified successfully.' : (data.error || 'Email transport verification failed.'), data.ok ? 'success' : 'error');
     } catch (e) {
-      showToast(e.message || 'SMTP verification failed', 'error');
+      showToast(e.message || 'Email transport verification failed', 'error');
     } finally {
       setEmailTesting(false);
     }
@@ -119,9 +118,17 @@ export default function SystemSettings() {
     }
     setEmailTesting(true);
     try {
-      await superAdminApi.sendTestEmail(testRecipient);
-      showToast(`Test email sent to ${testRecipient}.`);
+      const resp = await superAdminApi.sendTestEmail(testRecipient);
+      const data = resp?.data || resp || {};
+      // Phase 5: 202 = ACCEPTED, not delivered — never claim delivery.
+      if (data?.provider === 'microsoft-graph') {
+        showToast(`Test email accepted by Microsoft Graph (recipient: ${testRecipient}).`, 'success');
+      } else {
+        showToast(`Test email sent to ${testRecipient}.`, 'success');
+      }
     } catch (e) {
+      // Backend error strings are already sanitized & human-readable
+      // ("Graph authentication failed…", "Graph permission denied…", etc.).
       showToast(e.message || 'Test email failed', 'error');
     } finally {
       setEmailTesting(false);
@@ -313,60 +320,78 @@ export default function SystemSettings() {
         </div>
       </div>
 
-      {/* ─── Email (SMTP) Configuration — dedicated section ─── */}
+      {/* ─── Email (Microsoft Graph) Configuration — dedicated section ─── */}
+      {/* Transport details (Graph vs SMTP) stay backend-only; this screen shows
+          the server-resolved Graph status + non-secret identifiers + the
+          platform-wide notification settings. Secrets are NEVER returned. */}
       <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-4">
         <div className="flex items-center justify-between gap-2 flex-wrap">
           <div className="flex items-center gap-2">
             <Mail className="w-4 h-4 text-slate-500" />
             <div>
-              <h2 className="text-sm font-extrabold text-slate-800">Email (SMTP) Configuration</h2>
+              <h2 className="text-sm font-extrabold text-slate-800">Email (Microsoft Graph) Configuration</h2>
               <p className="text-[10px] font-semibold text-slate-400">
-                Used for verification codes, application updates and admin credentials.
+                Used for verification codes, application updates and admin notifications.
                 Email verification for onboarding is always mandatory and never disabled.
               </p>
             </div>
           </div>
-          {emailCfg?.status && (
-            <span className={`text-[10px] font-bold rounded-full px-2.5 py-1 border ${emailCfg.status === 'CONFIGURED' ? 'bg-green-50 border-green-200 text-green-700' : emailCfg.status === 'PARTIAL' ? 'bg-amber-50 border-amber-200 text-amber-700' : 'bg-red-50 border-red-200 text-red-700'}`}>
-              {emailCfg.status === 'CONFIGURED' ? 'Configured' : emailCfg.status === 'PARTIAL' ? 'Partially configured' : 'Not configured'}
+          {/* Status badge — derived from the BACKEND configuration/status response.
+              ENABLED = flag on + all four values present; INCOMPLETE = flag on
+              but configuration missing; DISABLED = legacy SMTP transport. */}
+          {emailCfg?.graph && (
+            <span className={`text-[10px] font-bold rounded-full px-2.5 py-1 border ${
+              emailCfg.graph.status === 'ENABLED' ? 'bg-green-50 border-green-200 text-green-700'
+              : emailCfg.graph.status === 'INCOMPLETE' ? 'bg-amber-50 border-amber-200 text-amber-700'
+              : 'bg-slate-50 border-slate-200 text-slate-500'}`}>
+              {emailCfg.graph.status === 'ENABLED' ? 'Microsoft Graph Enabled'
+                : emailCfg.graph.status === 'INCOMPLETE' ? 'Configuration Incomplete'
+                : 'Microsoft Graph Disabled'}
             </span>
           )}
         </div>
 
         {emailCfg && (
           <>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="flex flex-col gap-2">
-                <label className="text-xs font-bold text-slate-600">SMTP Host</label>
-                <input value={emailCfg.host || ''} onChange={(e) => handleEmailField('host', e.target.value)} disabled={emailSaving}
-                  className="w-full h-11 px-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold outline-none focus:border-[#16A34A] disabled:opacity-50" />
+            {/* ── Microsoft Graph (read-only, masked) ── */}
+            {emailCfg.graph && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-xs font-bold text-slate-600">Sender Email</label>
+                  <div className="h-11 px-3 py-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 font-mono">
+                    {emailCfg.graph.senderEmail || '—'}
+                  </div>
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-xs font-bold text-slate-600">Tenant ID</label>
+                  <div className="h-11 px-3 py-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 font-mono">
+                    {emailCfg.graph.tenantIdConfigured ? 'Configured' : 'Not configured'}
+                  </div>
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-xs font-bold text-slate-600">Client ID</label>
+                  <div className="h-11 px-3 py-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 font-mono">
+                    {emailCfg.graph.clientIdConfigured ? 'Configured' : 'Not configured'}
+                  </div>
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-xs font-bold text-slate-600">Client Secret</label>
+                  <div className="h-11 px-3 py-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700">
+                    <span className="inline-flex items-center gap-1.5">
+                      <Shield className="w-3.5 h-3.5 text-slate-400" />
+                      {emailCfg.graph.clientSecretConfigured ? 'Configured' : 'Not configured'}
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-slate-400">Graph credentials are environment-only (backend) — never editable or visible here.</p>
+                </div>
               </div>
-              <div className="flex flex-col gap-2">
-                <label className="text-xs font-bold text-slate-600">SMTP Port</label>
-                <input type="number" value={emailCfg.port ?? 587} onChange={(e) => handleEmailField('port', Number(e.target.value))} disabled={emailSaving}
-                  className="w-full h-11 px-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold outline-none focus:border-[#16A34A] disabled:opacity-50" />
-              </div>
-              <div className="flex flex-col gap-2">
-                <label className="text-xs font-bold text-slate-600">SMTP Username</label>
-                <input value={emailCfg.user || ''} onChange={(e) => handleEmailField('user', e.target.value)} disabled={emailSaving}
-                  className="w-full h-11 px-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold outline-none focus:border-[#16A34A] disabled:opacity-50" />
-              </div>
-              <div className="flex flex-col gap-2">
-                <label className="text-xs font-bold text-slate-600">SMTP Password</label>
-                <input type="password" value={emailCfg.password || ''} onChange={(e) => handleEmailField('password', e.target.value)} disabled={emailSaving}
-                  className="w-full h-11 px-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold outline-none focus:border-[#16A34A] disabled:opacity-50" />
-                {emailCfg.password === SECRET_MASK && (
-                  <p className="text-[10px] text-slate-400 flex items-center gap-1"><Shield className="w-3 h-3" /> Stored secret is preserved — leave as-is to keep it.</p>
-                )}
-              </div>
+            )}
+
+            {/* ── Platform-wide notification settings (transport-independent) ── */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
               <div className="flex flex-col gap-2">
                 <label className="text-xs font-bold text-slate-600">From Name</label>
                 <input value={emailCfg.fromName || ''} onChange={(e) => handleEmailField('fromName', e.target.value)} disabled={emailSaving}
-                  className="w-full h-11 px-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold outline-none focus:border-[#16A34A] disabled:opacity-50" />
-              </div>
-              <div className="flex flex-col gap-2">
-                <label className="text-xs font-bold text-slate-600">From Email</label>
-                <input type="email" value={emailCfg.fromEmail || ''} onChange={(e) => handleEmailField('fromEmail', e.target.value)} disabled={emailSaving}
                   className="w-full h-11 px-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold outline-none focus:border-[#16A34A] disabled:opacity-50" />
               </div>
               <div className="flex flex-col gap-2">
@@ -401,7 +426,7 @@ export default function SystemSettings() {
               <button onClick={handleVerifySmtp} disabled={emailTesting}
                 className="h-10 px-4 bg-white border border-slate-200 hover:bg-slate-50 text-slate-600 rounded-xl text-xs font-bold transition-all disabled:opacity-40 cursor-pointer flex items-center gap-1.5">
                 {emailTesting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
-                Verify SMTP
+                Verify Connection
               </button>
             </div>
 

@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useRef } from 'react';
 import { superAdminApi } from '../../../api/superAdmin.api';
 import { Loader2, X, TrendingUp, TrendingDown, RotateCcw, PlayCircle, XCircle, Ban, CalendarDays, CreditCard } from 'lucide-react';
+import { filterPlansForBusinessType, modeLabel } from '../../../utils/businessTypes';
 
 const MODE_META = {
   upgrade: { title: 'Upgrade Plan', icon: TrendingUp, color: 'text-green-600', bg: 'bg-green-50' },
@@ -28,12 +29,21 @@ export default function PlanChangeDialog({ restaurant, subscription, plans, mode
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
+  // Business-type eligibility: the SAME filter used by onboarding and the
+  // restaurant subscription page (mirrors the backend resolver). The backend
+  // still re-validates on changeSubscriptionPlan — this only stops the SA
+  // from selecting an incompatible plan in the first place.
+  const eligiblePlans = useMemo(
+    () => filterPlansForBusinessType(plans || [], restaurant?.businessType),
+    [plans, restaurant?.businessType]
+  );
+
   const availablePlans = useMemo(() => {
     if (mode === 'upgrade' || mode === 'downgrade') {
-      return (plans || []).filter((p) => p.isActive && p.code !== subscription?.plan);
+      return eligiblePlans.filter((p) => p.isActive && p.code !== subscription?.plan);
     }
     return [];
-  }, [mode, plans, subscription]);
+  }, [mode, eligiblePlans, subscription]);
 
   const selectedPlan = useMemo(() => {
     if (mode === 'upgrade' || mode === 'downgrade') {
@@ -131,7 +141,9 @@ export default function PlanChangeDialog({ restaurant, subscription, plans, mode
           {(mode === 'upgrade' || mode === 'downgrade') && (
             <>
               <div>
-                <label className={labelCls}>Available Plans</label>
+                <label className={labelCls}>
+                  Available Plans{restaurant?.businessMode ? ` — ${modeLabel(restaurant.businessMode)} only` : ''}
+                </label>
                 <select value={planId} onChange={(e) => setPlanId(e.target.value)} className={inputCls}>
                   <option value="">Select a plan…</option>
                   {availablePlans.map((p) => (

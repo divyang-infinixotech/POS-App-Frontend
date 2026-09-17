@@ -7,6 +7,7 @@ import {
   Upload, Trash2, File, Check, ExternalLink, Info,
 } from 'lucide-react';
 import { BUSINESS_TYPES, filterPlansForBusinessType, modeLabel } from '../../../utils/businessTypes';
+import { getBusinessCapabilities, catalogNaming } from '../../../utils/businessCapabilities';
 
 const CURRENCIES = ['INR', 'USD', 'EUR', 'GBP', 'AED'];
 const COUNTRIES = ['India', 'USA', 'UAE', 'UK', 'Singapore', 'Canada', 'Australia'];
@@ -234,8 +235,11 @@ export default function RestaurantOnboarding({ onClose, onSaved }) {
         language: restaurant.language,
         businessType: restaurant.businessType || 'RESTAURANT',
         website: restaurant.website || undefined,
-        // Food/Dietary Configuration — persisted to tenant RestaurantSetting
-        dietaryMode: restaurant.dietaryMode || 'VEG_AND_NON_VEG',
+        // Food/Dietary Configuration — persisted to tenant RestaurantSetting.
+        // Only sent for dietary-capable verticals (server also enforces this).
+        dietaryMode: getBusinessCapabilities(restaurant.businessType).dietary
+          ? (restaurant.dietaryMode || 'VEG_AND_NON_VEG')
+          : undefined,
         // Admin
         adminName: owner.adminName,
         adminEmail: normalizeEmail(owner.adminEmail),
@@ -338,6 +342,11 @@ export default function RestaurantOnboarding({ onClose, onSaved }) {
           <label className="text-[10px] font-bold text-slate-600">Business Type</label>
           <select value={restaurant.businessType} onChange={e => {
             updateRestaurant('businessType', e.target.value);
+            // Dynamic capability switch (§4): changing the type immediately
+            // hides/shows food configuration and drops stale food state for
+            // non-food verticals so dietaryMode is never submitted for them.
+            const caps = getBusinessCapabilities(e.target.value);
+            if (!caps.dietary) updateRestaurant('dietaryMode', null);
             // Mode changes with the type — drop a now-incompatible plan choice.
             if (selectedPlan && !filterPlansForBusinessType(plans, e.target.value).some(p => p.id === selectedPlan.id)) {
               setSelectedPlan(null);
@@ -410,25 +419,49 @@ export default function RestaurantOnboarding({ onClose, onSaved }) {
             submitted to the backend; language support itself is untouched). */}
       </div>
 
-      {/* Food / Dietary Configuration (Part 1) — NOT a separate wizard step */}
-      <h3 className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500 pt-2">Food / Dietary Configuration</h3>
-      <div className="flex items-center gap-2">
-        <button
-          type="button"
-          onClick={() => updateRestaurant('dietaryMode', 'VEG_ONLY')}
-          className={`px-3 py-1.5 rounded-lg text-[11px] font-bold transition-colors ${restaurant.dietaryMode === 'VEG_ONLY' ? 'bg-[#16A34A] text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
-        >
-          Veg Only
-        </button>
-        <button
-          type="button"
-          onClick={() => updateRestaurant('dietaryMode', 'VEG_AND_NON_VEG')}
-          className={`px-3 py-1.5 rounded-lg text-[11px] font-bold transition-colors ${restaurant.dietaryMode === 'VEG_AND_NON_VEG' ? 'bg-[#16A34A] text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
-        >
-          Veg + Non-Veg
-        </button>
-        <span className="text-[10px] text-slate-400">Maximum food type this restaurant can sell</span>
-      </div>
+      {/* Food / Dietary vs Product / Inventory configuration — driven by the
+          centralized capability map. Food verticals configure dietary mode;
+          non-food verticals get a product/inventory summary instead (no empty
+          gap, no food terminology). Updates immediately on type change (§4). */}
+      {getBusinessCapabilities(restaurant.businessType).dietary ? (
+        <>
+          <h3 className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500 pt-2">Food / Dietary Configuration</h3>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => updateRestaurant('dietaryMode', 'VEG_ONLY')}
+              className={`px-3 py-1.5 rounded-lg text-[11px] font-bold transition-colors ${restaurant.dietaryMode === 'VEG_ONLY' ? 'bg-[#16A34A] text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+            >
+              Veg Only
+            </button>
+            <button
+              type="button"
+              onClick={() => updateRestaurant('dietaryMode', 'VEG_AND_NON_VEG')}
+              className={`px-3 py-1.5 rounded-lg text-[11px] font-bold transition-colors ${restaurant.dietaryMode !== 'VEG_ONLY' ? 'bg-[#16A34A] text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+            >
+              Veg + Non-Veg
+            </button>
+            <span className="text-[10px] text-slate-400">Maximum food type this business can sell</span>
+          </div>
+        </>
+      ) : (
+        <>
+          <h3 className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500 pt-2">Product / Inventory Configuration</h3>
+          <div className="flex flex-wrap items-center gap-2">
+            {[
+              ['Barcode', getBusinessCapabilities(restaurant.businessType).barcode],
+              ['Inventory Tracking', getBusinessCapabilities(restaurant.businessType).inventory],
+              ['Stock Tracking', getBusinessCapabilities(restaurant.businessType).stock],
+              ['Variants', getBusinessCapabilities(restaurant.businessType).variants],
+            ].map(([label, enabled]) => (
+              <span key={label} className={`px-2.5 py-1 rounded-lg text-[10px] font-bold border ${enabled ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-slate-50 border-slate-200 text-slate-400'}`}>
+                {enabled ? '✓' : '—'} {label}
+              </span>
+            ))}
+            <span className="text-[10px] text-slate-400">Standard capabilities for this business type — no food/dietary controls</span>
+          </div>
+        </>
+      )}
     </div>
   );
 

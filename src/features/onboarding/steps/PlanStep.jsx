@@ -20,11 +20,17 @@ import { formatINR } from '../onboarding.lib';
  * applicant reviews and submits the application for manual Super Admin
  * approval instead.
  */
-export default function PlanStep({ onBack, onDone }) {
+export default function PlanStep({ onBack, onDone, onExitToLogin }) {
   const { payload, plans, config } = useOnboardingStore();
   // Only plans matching the business type's resolved mode are shown — the
   // backend also enforces this at plan selection (400 on mismatch).
-  const businessType = payload?.businessType || 'RESTAURANT';
+  // The status payload stores the application's business type at
+  // payload.restaurant.businessType (the server's safeRestaurant shape).
+  // Reading a top-level payload.businessType would always be undefined and
+  // silently fall back to RESTAURANT — hiding every correctly-returned
+  // BASIC_POS plan behind the display filter ("No plans are available for
+  // your business type").
+  const businessType = payload?.restaurant?.businessType || payload?.businessType || 'RESTAURANT';
   const compatiblePlans = filterPlansForBusinessType(plans, businessType);
   const [chosen, setChosen] = useState(null); // { plan }
   const [plansError, setPlansError] = useState('');
@@ -35,9 +41,12 @@ export default function PlanStep({ onBack, onDone }) {
     (async () => {
       // Load the public yearly plans once and cache them on the store.
       const list = await useOnboardingStore.getState().loadPlans();
+      const currentType = useOnboardingStore.getState().payload?.restaurant?.businessType
+        || useOnboardingStore.getState().payload?.businessType
+        || 'RESTAURANT';
       if (Array.isArray(list) && list.length === 0) {
         setPlansError('No plans are available right now. Please try again later or contact support.');
-      } else if (Array.isArray(list) && list.length > 0 && filterPlansForBusinessType(list, useOnboardingStore.getState().payload?.businessType || 'RESTAURANT').length === 0) {
+      } else if (Array.isArray(list) && list.length > 0 && filterPlansForBusinessType(list, currentType).length === 0) {
         setPlansError('No plans are available for your business type yet. Please contact support.');
       }
     })();
@@ -178,6 +187,7 @@ export default function PlanStep({ onBack, onDone }) {
       </StepCard>
 
       <StepActions
+        onExitToLogin={onExitToLogin}
         onBack={onBack}
         onContinue={chosen ? confirmPlan : undefined}
         continueDisabled={!chosen}

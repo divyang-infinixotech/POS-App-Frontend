@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { superAdminApi } from '../../../api/superAdmin.api';
 import { X, Loader2, Eye, EyeOff } from 'lucide-react';
 import { emailError as emailFieldError, emailOptionalError, normalizeEmail } from '../../../utils/email';
+import { getBusinessCapabilities } from '../../../utils/businessCapabilities';
+import { BUSINESS_TYPES, filterPlansForBusinessType } from '../../../utils/businessTypes';
 
 const CURRENCIES = ['INR', 'USD', 'EUR', 'GBP', 'AED'];
 const LANGUAGES = ['en', 'hi', 'gu', 'fr', 'ar'];
@@ -39,6 +41,7 @@ export default function RestaurantForm({ restaurant, onClose, onSaved }) {
     dietaryMode: restaurant?.dietaryMode || 'VEG_AND_NON_VEG',
     subscriptionPlan: restaurant?.plan || '',
     planId: restaurant?.planId || '',
+    businessType: restaurant?.businessType || 'RESTAURANT',
     trialDays: 15,
     logo: restaurant?.logo || '',
     // Admin fields (for create only)
@@ -99,7 +102,11 @@ export default function RestaurantForm({ restaurant, onClose, onSaved }) {
           dietaryMode: form.dietaryMode || undefined,
         });
       } else {
-        const selectedPlan = plans.find((p) => p.code === form.subscriptionPlan);
+        // Plan eligibility mirrors onboarding: only plans whose businessMode
+        // matches the SELECTED business type are offered, and the chosen plan
+        // is re-validated server-side on createRestaurant.
+        const eligiblePlans = filterPlansForBusinessType(plans, form.businessType);
+        const selectedPlan = eligiblePlans.find((p) => p.code === form.subscriptionPlan);
         await superAdminApi.createRestaurant({
           ...form,
           email: form.email ? normalizeEmail(form.email) : '',
@@ -219,7 +226,9 @@ export default function RestaurantForm({ restaurant, onClose, onSaved }) {
               </div>
             </div>
 
-            {/* Food / Dietary Configuration (Part 1) — same control as the wizard */}
+            {/* Food / Dietary Configuration (Part 1) — same control as the
+                wizard; hidden for non-food business types (capability map). */}
+            {getBusinessCapabilities(restaurant?.businessType).dietary && (
             <div className="space-y-1">
               <label className="text-[10px] font-bold text-slate-600">Food / Dietary Configuration</label>
               <div className="flex items-center gap-2">
@@ -240,6 +249,7 @@ export default function RestaurantForm({ restaurant, onClose, onSaved }) {
                 <span className="text-[10px] text-slate-400">Maximum food type this restaurant can sell</span>
               </div>
             </div>
+            )}
           </div>
 
           {/* Subscription */}
@@ -247,10 +257,22 @@ export default function RestaurantForm({ restaurant, onClose, onSaved }) {
             <h3 className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500">Subscription</h3>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1">
+                <label className="text-[10px] font-bold text-slate-600">Business Type</label>
+                <select value={form.businessType} onChange={e => {
+                  handleChange('businessType', e.target.value);
+                  // Type changed → drop a now-ineligible plan choice.
+                  if (!filterPlansForBusinessType(plans, e.target.value).some(p => p.code === form.subscriptionPlan)) {
+                    handleChange('subscriptionPlan', '');
+                  }
+                }} className="w-full h-9 px-3 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold outline-none focus:border-[#16A34A]" disabled={isEdit}>
+                  {BUSINESS_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+                </select>
+              </div>
+              <div className="space-y-1">
                 <label className="text-[10px] font-bold text-slate-600">Plan</label>
                 <select value={form.subscriptionPlan} onChange={e => handleChange('subscriptionPlan', e.target.value)} className="w-full h-9 px-3 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold outline-none focus:border-[#16A34A]" disabled={isEdit}>
                   <option value="">Select a plan…</option>
-                  {plans.filter(p => p.isActive).map(p => (
+                  {filterPlansForBusinessType(plans, form.businessType).filter(p => p.isActive).map(p => (
                     <option key={p.id} value={p.code}>{p.name} ({p.code})</option>
                   ))}
                 </select>

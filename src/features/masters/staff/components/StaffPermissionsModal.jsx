@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { X, Loader2, Shield, ChevronDown, ChevronRight, RotateCcw, Save } from 'lucide-react';
 import { userApi } from '../../../../api/user.api';
 import { STAFF_SCREEN_PERMISSION_KEYS } from '../../../../utils/permissions';
+import { useSettingsStore } from '../../../../store';
+import { getBusinessCapabilities, catalogNaming } from '../../../../utils/businessCapabilities';
 
 /**
  * Staff Permissions modal (Part 7).
@@ -44,6 +46,28 @@ export default function StaffPermissionsModal({ member, onClose, onSaved }) {
   const [expandedGroups, setExpandedGroups] = useState(new Set());
 
   const staffId = member?.backendId;
+  // Food Access only exists for food verticals (§6/§11) — retail businesses
+  // have no dietary concept, so the section is not rendered at all.
+  const isDietaryBusiness = useSettingsStore((s) =>
+    (s.settings.capabilities || getBusinessCapabilities(s.settings.businessType)).dietary === true);
+  // §6: Screen Access + Action Permissions are capability-filtered — retail
+  // tenants never see Kitchen Tickets / Floors & Tables, and capability-disabled
+  // action permissions are hidden with the group counts recalculated from the
+  // VISIBLE keys (no stale 9/9).
+  const capabilities = useSettingsStore((s) =>
+    s.settings.capabilities || getBusinessCapabilities(s.settings.businessType));
+  const CAPABILITY_HIDDEN_SCREEN_KEYS = new Set([
+    ...(!capabilities.kitchen ? ['kitchen.view'] : []),
+    ...(!capabilities.tables ? ['tables.view'] : []),
+  ]);
+  const isActionHidden = (key) =>
+    (key === 'kitchen.view' && !capabilities.kitchen) ||
+    (key === 'tables.view' && !capabilities.tables);
+  const visibleScreenKeys = STAFF_SCREEN_PERMISSION_KEYS.filter((k) => !CAPABILITY_HIDDEN_SCREEN_KEYS.has(k));
+  // §7: catalog screen label follows the tenant's terminology (Menu ↔ Products).
+  const catalogScreenLabel = catalogNaming(
+    useSettingsStore.getState().settings.businessType
+  ).catalogLabel;
 
   useEffect(() => {
     let alive = true;
@@ -138,7 +162,6 @@ export default function StaffPermissionsModal({ member, onClose, onSaved }) {
     }
   };
 
-  const screenKeys = STAFF_SCREEN_PERMISSION_KEYS;
   const groupKeys = new Set(actionGroups.flatMap((g) => g.keys));
 
   return (
@@ -174,8 +197,9 @@ export default function StaffPermissionsModal({ member, onClose, onSaved }) {
               </div>
             )}
 
-            {/* Food Access (Parts 9/14): restaurant mode is the ceiling */}
-            <div>
+            {/* Food Access (Parts 9/14): restaurant mode is the ceiling.
+                Hidden entirely for non-food business types. */}
+            {isDietaryBusiness && (<div>
               <h5 className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500 mb-1.5">Food Access</h5>
               <p className="text-[10px] text-slate-400 font-medium mb-1.5">
                 Restaurant dietary mode: <span className="font-bold text-slate-600">{restaurantDietaryMode === 'VEG_ONLY' ? 'Veg Only' : 'Veg + Non-Veg'}</span>
@@ -205,13 +229,13 @@ export default function StaffPermissionsModal({ member, onClose, onSaved }) {
                   );
                 })}
               </div>
-            </div>
+            </div>) }
 
-            {/* Screen Access (Part 7) */}
+            {/* Screen Access (Part 7) — capability-filtered (§6) */}
             <div>
               <h5 className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500 mb-1.5">Screen Access</h5>
               <div className="space-y-1.5">
-                {screenKeys.map((key) => (
+                {visibleScreenKeys.map((key) => (
                   <label key={key} className="flex items-center gap-2 text-xs font-semibold text-slate-700 cursor-pointer">
                     <input
                       type="checkbox"
@@ -220,7 +244,7 @@ export default function StaffPermissionsModal({ member, onClose, onSaved }) {
                       disabled={fullAccess || saving}
                       className="accent-[#16A34A]"
                     />
-                    {STAFF_SCREEN_LABELS[key] || key}
+                    {key === 'menu.view' ? catalogScreenLabel : (STAFF_SCREEN_LABELS[key] || key)}
                   </label>
                 ))}
               </div>
@@ -230,7 +254,13 @@ export default function StaffPermissionsModal({ member, onClose, onSaved }) {
             <div>
               <h5 className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500 mb-1.5">Action Permissions</h5>
               <div className="space-y-1.5">
-                {actionGroups.map((group) => (
+                {actionGroups.map((rawGroup) => {
+                  // §6: hide capability-disabled actions and compute the count
+                  // from VISIBLE keys only (checked/total both reflect the
+                  // filtered list).
+                  const group = { ...rawGroup, keys: rawGroup.keys.filter((k) => !isActionHidden(k)) };
+                  if (group.keys.length === 0) return null;
+                  return (
                   <div key={group.group} className="border border-slate-200 rounded-lg overflow-hidden">
                     <button
                       type="button"
@@ -262,7 +292,8 @@ export default function StaffPermissionsModal({ member, onClose, onSaved }) {
                       </div>
                     )}
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           </div>

@@ -8,6 +8,7 @@ import {
   Monitor, Layout, Plus, Utensils, Leaf, Beef, ShoppingCart, ScanBarcode
 } from 'lucide-react';
 import { useSettingsStore, useUiStore, useAuthStore } from '../../../store';
+import { getBusinessCapabilities } from '../../../utils/businessCapabilities';
 import { FEATURE_FOR_SETTING, hasFeature } from '../../../utils/permissions';
 
 // ─── Reusable UI Components ─────────────────────────────────────────────────
@@ -236,6 +237,11 @@ export default function SettingsPage() {
   }, []);
 
   const businessMode = settings.businessMode || 'restaurant';
+  // Centralized business capabilities (server-resolved businessType via the
+  // settings API; mirrored locally per utils/businessCapabilities.js).
+  const capabilities = settings.capabilities || getBusinessCapabilities(settings.businessType);
+  const isFoodBusiness = capabilities.dietary === true;
+  const isKitchenBusiness = capabilities.kitchen === true;
 
   // Plan module lock — a module excluded from the restaurant's subscription plan
   // cannot be enabled from Settings (backend authorization still blocks it).
@@ -249,11 +255,14 @@ export default function SettingsPage() {
   const visibleModuleToggles = useMemo(() => {
     return MODULE_TOGGLES.filter((t) => {
       if (!t.modes.includes(businessMode)) return false;
+      // Business-capability filter (§12): kitchen/KOT toggles never appear for
+      // non-kitchen verticals regardless of plan/mode; dietary requires food.
+      if (t.key === 'enableKitchen' && !isKitchenBusiness) return false;
       if (planLocked(t.key)) return false;
       return true;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [businessMode, subscription]);
+  }, [businessMode, subscription, isKitchenBusiness]);
 
   // ── Search: match the section label OR any VISIBLE setting label in it.
   // Hidden settings (wrong business mode / not in plan) are never searched.
@@ -514,7 +523,10 @@ export default function SettingsPage() {
               )}
             </SectionCard>
 
-            <SectionCard title="Food Settings" description="Controls the maximum food type available in this restaurant. Individual staff may have a more restrictive setting." icon={Utensils}>
+            {/* Food Settings — only for dietary-capable (food) businesses.
+                Non-food verticals see no Veg/Non-Veg UI at all. */}
+            {isFoodBusiness && (
+            <SectionCard title="Food Settings" description="Controls the maximum food type available in this business. Individual staff may have a more restrictive setting." icon={Utensils}>
               <div className="flex items-center justify-between gap-3 py-2">
                 <div className="flex-1 min-w-0">
                   <p className="text-xs font-bold text-slate-700">Dietary Menu Mode</p>
@@ -534,6 +546,7 @@ export default function SettingsPage() {
                 </div>
               </div>
             </SectionCard>
+            )}
 
             <SectionCard title="Module Visibility" description="Enable or disable entire modules. Disabled modules are hidden from the sidebar and blocked from all workflows." icon={Monitor}>
               {visibleModuleToggles.length === 0 ? (
@@ -553,6 +566,8 @@ export default function SettingsPage() {
               )}
             </SectionCard>
 
+            {/* Kitchen & KOT — only for kitchen-capable (food) businesses. */}
+            {isKitchenBusiness && (
             <SectionCard title="Kitchen & KOT" description="Kitchen ticket configuration" icon={ChefHat}>
               <div className="flex items-center justify-between py-2.5 px-3 bg-slate-50 rounded-xl border border-slate-200">
                 <div className="flex-1 min-w-0">
@@ -576,6 +591,7 @@ export default function SettingsPage() {
                 KOTs are generated automatically when an order is placed (no extra setting required).
               </p>
             </SectionCard>
+            )}
           </div>
         );
 
@@ -954,10 +970,10 @@ export default function SettingsPage() {
                 <div className="space-y-1">
                   <label className="text-[9px] font-bold uppercase text-slate-400">Type</label>
                   <select value={printerForm.type} onChange={(e) => setPrinterForm(p => ({ ...p, type: e.target.value }))} className="w-full h-8 px-1 bg-slate-50 border border-slate-200 rounded-lg outline-none focus:border-[#16A34A] transition-all cursor-pointer">
-                    <option value="Kitchen">Kitchen</option>
+                    {capabilities.kitchen === true && <option value="Kitchen">Kitchen</option>}
+                    {capabilities.kitchen === true && <option value="KOT">KOT</option>}
                     <option value="Billing">Billing</option>
                     <option value="Receipt">Receipt</option>
-                    <option value="KOT">KOT</option>
                     <option value="Barcode">Barcode</option>
                   </select>
                 </div>

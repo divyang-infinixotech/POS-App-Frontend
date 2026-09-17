@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { settingApi } from '../api/setting.api';
+import { getBusinessCapabilities } from '../utils/businessCapabilities';
 
 // ── Keys that control module visibility in the sidebar & route guard ──────
 const MODULE_VISIBILITY_KEYS = [
@@ -121,6 +122,10 @@ const getCurrencySymbol = (currency) => {
 
 // ── Defaults ─────────────────────────────────────────────────────────────────
 const defaultSettings = {
+  // Business-type awareness (overwritten from the server settings response;
+  // default assumes the historical food default until the API responds).
+  businessType: 'RESTAURANT',
+  capabilities: getBusinessCapabilities('RESTAURANT'),
   branding: {
     logo: '',
     restaurantName: 'Nirka POS',
@@ -356,6 +361,11 @@ const useSettingsStore = create((set, get) => ({
               ? s.dietaryMode : base.dietaryMode,
             posLayout: s.posLayout || base.posLayout || 'basic',
             businessMode: normalizeBusinessMode(s.businessMode || base.businessMode),
+            // Business-type awareness (server-resolved from the platform
+            // Restaurant row — never client-supplied). Falls back to the
+            // previous behavior (food) when the backend hasn't been upgraded.
+            businessType: s.businessType || base.businessType || 'RESTAURANT',
+            capabilities: s.capabilities || getBusinessCapabilities(s.businessType || 'RESTAURANT'),
             enableCounterSale: s.enableCounterSale !== null && s.enableCounterSale !== undefined
               ? s.enableCounterSale : base.enableCounterSale,
             // Part 11: tenant Barcode Scanner toggle (DB column, default false)

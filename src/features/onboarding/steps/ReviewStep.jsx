@@ -17,7 +17,7 @@ import { formatINR } from '../onboarding.lib';
  * and the applicant is NOT logged into the POS. The wizard then shows the
  * pending page and the Super Admin reviews the application.
  */
-export default function ReviewStep({ onBack, onDone }) {
+export default function ReviewStep({ onBack, onDone, onExitToLogin }) {
   const { payload, config } = useOnboardingStore();
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState('');
@@ -128,6 +128,7 @@ export default function ReviewStep({ onBack, onDone }) {
       </StepCard>
 
       <StepActions
+        onExitToLogin={onExitToLogin}
         onBack={onBack}
         onContinue={submit}
         loading={submitting ? 'Submitting application…' : false}

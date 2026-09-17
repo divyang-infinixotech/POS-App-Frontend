@@ -14,8 +14,11 @@ export const onboardingApi = {
     apiClient.get('/onboarding/config'),
 
   // Public purchasable plans (yearly-only billing).
-  getPlans: () =>
-    apiClient.get('/onboarding/plans'),
+  // ?businessType is a display convenience — the BACKEND resolves the mode
+  // from the stored application businessType on every assignment, so a
+  // tampered query param can never make an ineligible plan purchasable.
+  getPlans: (businessType) =>
+    apiClient.get('/onboarding/plans', { params: businessType ? { businessType } : undefined }),
 
   // ── Applicant state + steps ──
   // Canonical payload: { account:{status,step,label}, restaurant, steps,

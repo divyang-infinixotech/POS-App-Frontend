@@ -12,6 +12,9 @@ export const subscriptionApi = {
   getGatewayStatus: () => apiClient.get('/subscriptions/gateway-status'),
   refresh: () => apiClient.get('/subscriptions/refresh'),
   listPlans: (cycle) => apiClient.get('/subscriptions/plans', { params: cycle ? { cycle } : {} }),
+  // Server-resolved eligibility metadata (businessType/businessMode) for the
+  // plan screen — the UI labels the list, it never re-derives the mapping.
+  getPlansMeta: () => apiClient.get('/subscriptions/plans/meta'),
   getPaymentHistory: () => apiClient.get('/subscriptions/payments'),
   getPayment: (id) => apiClient.get(`/subscriptions/payments/${id}`),
   createCheckout: (data) => apiClient.post('/subscriptions/checkout', data),

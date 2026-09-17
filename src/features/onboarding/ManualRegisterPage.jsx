@@ -45,16 +45,25 @@ export default function ManualRegisterPage() {
     if (formError) setFormError('');
   };
   
-  // Load plans on mount
+  // Load plans on mount (unfiltered — the server validates compatibility on
+  // submit; the radio list below is scoped by the shared client-side filter).
   React.useEffect(() => {
     loadPlans().then(loaded => {
       if (loaded && loaded.length > 0) {
         setPlans(loaded);
-        // Pre-select first plan
-        setForm(f => ({ ...f, planId: loaded[0].id }));
       }
     });
   }, []);
+
+  // When the business type changes, drop a pre-selected plan that is no longer
+  // compatible (e.g. RESTAURANT default pre-selection + user picks SUPERMARKET).
+  const compatiblePlans = filterPlansForBusinessType(plans, form.businessType);
+  const planCompatible = compatiblePlans.some((p) => p.id === form.planId);
+  React.useEffect(() => {
+    if (!planCompatible && compatiblePlans.length > 0) {
+      setForm((f) => (f.planId === compatiblePlans[0].id ? f : { ...f, planId: compatiblePlans[0].id }));
+    }
+  }, [planCompatible, compatiblePlans]);
   
   const handleAccountSubmit = async () => {
     if (submitting) return;

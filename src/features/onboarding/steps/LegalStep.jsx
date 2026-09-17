@@ -47,7 +47,7 @@ Uploaded documents may be reviewed by the platform team to verify your business 
  * backend advertises (payload.legal.required / /onboarding/config). The
  * backend remains the source of truth for acceptance records and versions.
  */
-export default function LegalStep({ onBack, onDone }) {
+export default function LegalStep({ onBack, onDone, onExitToLogin }) {
   const { payload, config } = useOnboardingStore();
   const legal = payload?.legal || null;
 
@@ -164,6 +164,7 @@ export default function LegalStep({ onBack, onDone }) {
       </StepCard>
 
       <StepActions
+        onExitToLogin={onExitToLogin}
         onBack={onBack}
         onContinue={handleSubmit}
         continueDisabled={!allChecked}

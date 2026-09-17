@@ -3,6 +3,7 @@ import { reportApi } from '../../../api/report.api';
 import { formatCurrency, formatDate, formatTime } from '../../../lib/utils';
 import { useSettingsStore, useUiStore } from '../../../store';
 import { useSocketEvent } from '../../../hooks/useSocket';
+import { getBusinessCapabilities } from '../../../utils/businessCapabilities';
 import {
   TrendingUp, ShoppingBag, CreditCard, Tag, ChefHat, Package, LayoutGrid, Users, BarChart3,
   RefreshCw, AlertTriangle, Loader2,
@@ -23,8 +24,9 @@ import TableReports from '../components/TableReports';
 import StaffReports from '../components/StaffReports';
 import ManagementReports from '../components/ManagementReports';
 
-// ── Report Categories ──
-const CATEGORIES = [
+// ── Report Categories (filtered per-tenant by business capabilities; see
+// ReportsPage — this is the base definition) ──
+const BASE_CATEGORIES = [
   { key: 'sales', label: 'Sales', icon: TrendingUp, color: 'text-[#16A34A]', activeBg: 'bg-[#16A34A]', activeText: 'text-white', hoverBg: 'hover:bg-emerald-50', inactiveText: 'text-slate-500', activeBorder: 'border-[#16A34A]' },
   { key: 'orders', label: 'Orders', icon: ShoppingBag, color: 'text-blue-600', activeBg: 'bg-blue-600', activeText: 'text-white', hoverBg: 'hover:bg-blue-50', inactiveText: 'text-slate-500', activeBorder: 'border-blue-600' },
   { key: 'payments', label: 'Payments', icon: CreditCard, color: 'text-purple-600', activeBg: 'bg-purple-600', activeText: 'text-white', hoverBg: 'hover:bg-purple-50', inactiveText: 'text-slate-500', activeBorder: 'border-purple-600' },
@@ -40,8 +42,29 @@ export default function ReportsPage() {
   const { settings } = useSettingsStore();
   const { refreshTrigger } = useUiStore();
 
+  // ── Capability-driven report categories (§3/§4) ──
+  // Kitchen and Tables tabs exist only when the tenant's SERVER-RESOLVED
+  // business capabilities allow them. Retail tenants never see them — not
+  // even as empty tabs reachable by clicking.
+  const capabilities = settings.capabilities || getBusinessCapabilities(settings.businessType);
+  const showKitchenReports = capabilities.kitchen === true && capabilities.kot === true;
+  const showTableReports = capabilities.tables === true && capabilities.floors === true;
+  const CATEGORIES = BASE_CATEGORIES.filter((c) =>
+    c.key === 'kitchen' ? showKitchenReports :
+    c.key === 'tables' ? showTableReports : true
+  );
+
   // ── Category State ──
   const [activeCategory, setActiveCategory] = useState('sales');
+
+  // §3: a manual/URL-driven activeCategory that is no longer available
+  // (capability off, stale local state) falls back to Sales — never an empty
+  // Kitchen/Tables page.
+  useEffect(() => {
+    if (!CATEGORIES.some((c) => c.key === activeCategory)) {
+      setActiveCategory('sales');
+    }
+  }, [CATEGORIES, activeCategory]);
 
   // ── Date State ──
   const [quickRange, setQuickRange] = useState('today');
@@ -293,7 +316,7 @@ useEffect(() => { loadReports(); }, [loadReports, refreshTrigger]);
             <div>
               <h1 className="text-lg font-extrabold text-[#191c1e]">Reports &amp; Sales</h1>
               <p className="text-[11px] text-slate-500 font-medium mt-0.5">
-                View restaurant sales performance, order history, payment analytics, kitchen performance and business insights.
+                View {capabilities.kitchen === true ? 'restaurant sales' : 'business sales'} performance, order history, payment analytics{showKitchenReports ? ', kitchen performance' : ''} and business insights.
               </p>
             </div>
             <div className="flex items-center gap-1.5">

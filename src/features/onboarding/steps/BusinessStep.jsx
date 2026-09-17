@@ -14,7 +14,7 @@ import { Field, Select, StepActions, configLabel } from '../components/controls'
  * creates the Restaurant row the first time and re-derives the stage, so the
  * wizard advances to Documents once business details are stored.
  */
-export default function BusinessStep({ onBack, onDone }) {
+export default function BusinessStep({ onBack, onDone, onExitToLogin }) {
   const { payload, config } = useOnboardingStore();
   const restaurant = payload?.restaurant || null;
   const account = payload?.account || null;
@@ -301,6 +301,7 @@ export default function BusinessStep({ onBack, onDone }) {
       </StepCard>
 
       <StepActions
+        onExitToLogin={onExitToLogin}
         onBack={onBack}
         onContinue={handleSubmit}
         loading={saving ? 'Saving…' : false}

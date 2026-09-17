@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { X, Loader2, MapPin, Save, ShoppingBag } from 'lucide-react';
 import { userApi } from '../../../../api/user.api';
 import { floorApi } from '../../../../api/floor.api';
+import { useSettingsStore } from '../../../../store';
+import { getBusinessCapabilities } from '../../../../utils/businessCapabilities';
 
 /**
  * Assign Access modal (floors + optional Takeaway order access).
@@ -28,6 +30,12 @@ export default function AssignFloorsModal({ member, onClose, onSaved }) {
   const [floors, setFloors] = useState([]);
   const [selected, setSelected] = useState(new Set());
   const [takeaway, setTakeaway] = useState(false);
+
+  // §5: Dine In / Takeaway / Floor Access only exist for table-capable
+  // (food dine-in) businesses. Retail tenants get none of it — the modal
+  // renders a simple "no assignments" state instead.
+  const showFloorAccess = useSettingsStore((s) =>
+    (s.settings.capabilities || getBusinessCapabilities(s.settings.businessType)).tables === true);
 
   const staffId = member?.backendId;
 
@@ -107,6 +115,15 @@ export default function AssignFloorsModal({ member, onClose, onSaved }) {
             </div>
           ) : error ? (
             <div className="text-xs text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2">{error}</div>
+          ) : !showFloorAccess ? (
+            /* §5: retail — no Order Access (Dine In/Takeaway) and no Floor Access.
+               Keep the modal openable (save still works for legacy data) but show
+               a clean, intentional state instead of restaurant-only controls. */
+            <div className="text-center py-8">
+              <MapPin className="w-8 h-8 text-slate-200 mx-auto mb-3" />
+              <p className="text-xs font-semibold text-slate-500">No floor or order-mode assignments for this business.</p>
+              <p className="text-[10px] text-slate-400 mt-1">Floor and order-type access applies to dine-in businesses only.</p>
+            </div>
           ) : (
             <>
               {/* ── ORDER ACCESS ── */}
@@ -185,7 +202,8 @@ export default function AssignFloorsModal({ member, onClose, onSaved }) {
           <button onClick={onClose} className="px-4 py-2 rounded-lg text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 cursor-pointer">
             Cancel
           </button>
-          <button
+          {showFloorAccess && (
+            <button
             onClick={handleSave}
             disabled={loading || saving}
             className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-bold text-white bg-[#16A34A] hover:bg-[#15803D] disabled:opacity-50 cursor-pointer"
@@ -193,6 +211,7 @@ export default function AssignFloorsModal({ member, onClose, onSaved }) {
             {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
             Save
           </button>
+          )}
         </div>
       </div>
     </div>

@@ -5,6 +5,7 @@ import {
   ScanBarcode, AlertTriangle, ScanLine,
 } from 'lucide-react';
 import { useCartStore, useUiStore, useSettingsStore, useAuthStore } from '../../../../store';
+import { getBusinessCapabilities } from '../../../../utils/businessCapabilities';
 import { menuApi } from '../../../../api/menu.api';
 import { categoryApi } from '../../../../api/category.api';
 import { orderApi } from '../../../../api/order.api';
@@ -24,6 +25,9 @@ const ICON_MAP = {
 
 export default function PosWorkspace() {
   const { settings } = useSettingsStore();
+  // Dietary indicators only for food verticals (§10) — retail product cards
+  // show no veg/non-veg marks. One capability check, not scattered flags.
+  const isDietaryBusiness = (settings.capabilities || getBusinessCapabilities(settings.businessType)).dietary === true;
   const currency = settings?.currencySymbol || '₹';
   const { activeOrderTakingId, setScreen, setCheckoutOrderId, addToast, goBack, refreshTrigger } = useUiStore();
   const { user } = useAuthStore();
@@ -46,7 +50,12 @@ export default function PosWorkspace() {
 
   // ── Cart / order state ──
   const [cartItems, setCartItems] = useState([]);
-  const floorManagementOff = settings?.enableFloorManagement === false;
+  // §7: capability-aware POS — a non-table business (retail/bakery/food-truck)
+  // never shows Dine In / table selection. Derived from the server-resolved
+  // capabilities, composed with the existing module toggles.
+  const businessCaps = (settings?.capabilities) || {};
+  const tablesCapable = businessCaps.tables !== false && businessCaps.floors !== false;
+  const floorManagementOff = settings?.enableFloorManagement === false || !tablesCapable;
   const [orderType, setOrderType] = useState(floorManagementOff ? 'Takeaway' : 'Dine In');
   const [guestCount, setGuestCount] = useState(2);
   const [customerName, setCustomerName] = useState('');
@@ -58,7 +67,9 @@ export default function PosWorkspace() {
   const [submitting, setSubmitting] = useState(null); // null | 'place' | 'pay'
 
   // Counter sale mode flag
-  const counterSaleMode = settings?.enableCounterSale === true;
+  // §7: retail tenants are ALWAYS counter-sale (no floor/table workflow) —
+  // the toggle cannot re-introduce Dine In for a business without tables.
+  const counterSaleMode = settings?.enableCounterSale === true || !tablesCapable;
 
   // ── Barcode scanner (Part 11 + Counter Scan mode) — same entitlement rule
   // as the full POS wizard: plan includes barcode_scanner AND the restaurant
@@ -458,11 +469,13 @@ export default function PosWorkspace() {
               <div className="relative h-24 rounded-none overflow-hidden border-b border-slate-100">
                 <img src={item.image} alt={item.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" loading="lazy" decoding="async"
                   onError={(e) => { e.target.src = PLACEHOLDER_IMAGE; }} />
+                {isDietaryBusiness && (
                 <span className="absolute top-1.5 left-1.5 w-4 h-4 rounded-sm border-2 flex items-center justify-center bg-white/90 ${
                   item.isVeg ? 'border-emerald-600' : 'border-red-600'
                 }">
                   <span className={`w-2 h-2 rounded-full ${item.isVeg ? 'bg-emerald-600' : 'bg-red-600'}`} />
                 </span>
+                )}
                 <span className="absolute bottom-1.5 right-1.5 bg-slate-900/80 text-white font-mono text-[10px] font-bold px-1.5 py-0.5 rounded">{currency}{item.price}</span>
                 {lowStock && (
                   <span className="absolute bottom-1.5 left-1.5 bg-red-500 text-white text-[8px] font-bold px-1.5 py-0.5 rounded">Low Stock</span>

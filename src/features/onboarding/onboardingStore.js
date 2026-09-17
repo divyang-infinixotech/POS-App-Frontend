@@ -38,7 +38,11 @@ const useOnboardingStore = create((set, get) => ({
 
   loadPlans: async () => {
     try {
-      const resp = await onboardingApi.getPlans();
+      // The stored businessType (when the application exists) scopes the list
+      // server-side. Before business details are saved the full active list
+      // is returned and the wizard filters it client-side for display.
+      const businessType = get().payload?.restaurant?.businessType || null;
+      const resp = await onboardingApi.getPlans(businessType);
       const plans = resp && resp.data ? resp.data : resp;
       set({ plans: Array.isArray(plans) ? plans : [] });
       return plans;

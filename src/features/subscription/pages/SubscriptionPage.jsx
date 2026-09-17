@@ -8,6 +8,7 @@ import { subscriptionApi } from '../../../api/subscription.api';
 import { useAuthStore, useUiStore, useSettingsStore } from '../../../store';
 import { useSocketEvent } from '../../../hooks/useSocket';
 import { formatDate, cn } from '../../../lib/utils';
+import { modeLabel } from '../../../utils/businessTypes';
 
 // ── Access rule ─────────────────────────────────────────────────────────────
 // This screen is NOT a sidebar module. The ONLY entry point is the header
@@ -143,6 +144,9 @@ export default function SubscriptionPage() {
 
   const loadPlans = useCallback(async () => {
     try {
+      // The BACKEND filters this list to the restaurant's server-resolved
+      // business mode (same resolver as onboarding). The list is consumed as
+      // returned — no client-side business-type filtering is added here.
       const plansRes = await subscriptionApi.listPlans();
       setPlans(Array.isArray(plansRes.data) ? plansRes.data : []);
     } catch (e) {
@@ -517,7 +521,11 @@ export default function SubscriptionPage() {
 
           {/* ── Available plans ── */}
           <Card>
-            <SectionTitle icon={CreditCard} title="Available Plans" sub="Choose a yearly plan — it activates immediately after successful payment" />
+            <SectionTitle
+              icon={CreditCard}
+              title="Available Plans"
+              sub={`Choose a yearly plan — it activates immediately after successful payment${plans[0]?.businessMode ? ` · ${modeLabel(plans[0].businessMode)} plans for your business type` : ''}`}
+            />
 
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
               {plans.map((plan) => {

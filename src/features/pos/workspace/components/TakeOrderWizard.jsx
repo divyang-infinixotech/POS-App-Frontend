@@ -9,6 +9,7 @@ import {
   RotateCcw, UserPlus, LayoutGrid, Package
 } from 'lucide-react';
 import { useUiStore, useCartStore, useSettingsStore, useAuthStore } from '../../../../store';
+import { getBusinessCapabilities } from '../../../../utils/businessCapabilities';
 import { menuApi } from '../../../../api/menu.api';
 import { tableApi } from '../../../../api/table.api';
 import { orderApi } from '../../../../api/order.api';
@@ -87,6 +88,9 @@ export default function TakeOrderWizard({ mode = 'modal' } = {}) {
   const { showTakeOrderWizard, setShowTakeOrderWizard, setScreen, addToast, activeOrderTakingId, setActiveOrderTakingId, setOrdersActiveTab, currentScreen, incrementRefreshTrigger, setCheckoutOrderId } = useUiStore();
   const { addOrder } = useCartStore();
   const { settings } = useSettingsStore();
+  // Dietary indicators only for food verticals (§10) — retail fallback shows a
+  // neutral product icon instead of food emoji. One capability check.
+  const isDietaryBusiness = (settings.capabilities || getBusinessCapabilities(settings.businessType)).dietary === true;
   const currency = settings?.currencySymbol || '₹';
   const { user } = useAuthStore();
   const isServiceStaff = (user?.role || '').toUpperCase() === 'WAITER';
@@ -183,7 +187,10 @@ export default function TakeOrderWizard({ mode = 'modal' } = {}) {
   // ── Shared order-type resolution (Part 8) ──
   // Order type must be resolved BEFORE unnecessary steps render — no component
   // that depends on floor/table state mounts while orderType is still unknown.
-  const skipFloorMgmtResolved = settings.enableFloorManagement === false;
+  // §7: a non-table business (retail — capabilities.tables=false) also skips
+  // floor management regardless of the tenant module toggle.
+  const wizardCaps = settings.capabilities || {};
+  const skipFloorMgmtResolved = settings.enableFloorManagement === false || wizardCaps.tables === false;
   const orderTypeResolution = resolveAvailableOrderTypes({
     role: user?.role,
     assignedOrderTypes,
@@ -232,7 +239,7 @@ export default function TakeOrderWizard({ mode = 'modal' } = {}) {
       if (forced === 'takeaway') {
         setCurrentStep(1);
       } else {
-        setCurrentStep(settings.enableFloorManagement === false ? 3 : 1);
+        setCurrentStep(skipFloorMgmtResolved ? 3 : 1);
       }
     }
   }, [isEditing, grantLoaded, dataLoading, orderTypeResolution.showSelection, orderTypeResolution.forcedType, currentStep, orderType, settings.enableFloorManagement]);
@@ -530,7 +537,8 @@ export default function TakeOrderWizard({ mode = 'modal' } = {}) {
   // ── Helpers ──
   const isTakeaway = orderType === 'takeaway';
   const needsTable = orderType === 'dine_in';
-  const skipFloorMgmt = settings.enableFloorManagement === false;
+  // §7: floor/table steps also skipped for non-table business types.
+  const skipFloorMgmt = settings.enableFloorManagement === false || (settings.capabilities || {}).tables === false;
   // When floor management is disabled, skip floor & table steps (Quick Order mode)
   // For takeaway: 3 steps (Order Type → Menu → Review) → maxStep = 2
   // For dine-in with floor mgmt: 5 steps → maxStep = 4
@@ -1202,13 +1210,15 @@ export default function TakeOrderWizard({ mode = 'modal' } = {}) {
                       onError={(e) => { e.target.src = PLACEHOLDER_IMAGE; }} />
                   ) : (
                     <div className="w-full h-full flex items-center justify-center">
-                      <span className="text-3xl">{item.isVeg ? '🥗' : '🍖'}</span>
+                      <span className="text-3xl">{isDietaryBusiness ? (item.isVeg ? '🥗' : '🍖') : '📦'}</span>
                     </div>
                   )}
-                  {/* Veg / Non-veg indicator */}
+                  {/* Veg / Non-veg indicator — food verticals only (§10) */}
+                  {isDietaryBusiness && (
                   <span className="absolute top-1.5 left-1.5 w-4 h-4 rounded-sm border-2 flex items-center justify-center bg-white/90">
                     <span className={`w-2 h-2 rounded-full ${item.isVeg ? 'bg-emerald-600 border-emerald-600' : 'bg-red-600 border-red-600'}`} />
                   </span>
+                  )}
                   {/* Price badge */}
                   <span className="absolute bottom-1.5 right-1.5 bg-slate-900/80 text-white font-mono text-[10px] font-bold px-1.5 py-0.5 rounded">
                     {currency}{item.price}

@@ -17,6 +17,7 @@ import TakeOrderWizard from '../../../features/pos/workspace/components/TakeOrde
 import ErrorBoundary from '../../common/ErrorBoundary';
 import { AlertTriangle, X, CheckCircle2, ShieldAlert } from 'lucide-react';
 import { canAccessScreen, getDefaultScreenForRole, SCREEN_FEATURES, hasFeature, isScreenAllowedForBusinessMode } from '../../../utils/permissions';
+import { getBusinessCapabilities } from '../../../utils/businessCapabilities';
 import OnboardingFlow from '../../../features/onboarding/OnboardingFlow';
 import RegisterPage from '../../../features/onboarding/RegisterPage';
 import { isSelfServeOnboarding, resolveHomeScreen } from '../../../features/onboarding/onboarding.lib';
@@ -135,6 +136,16 @@ const SCREEN_TO_SETTING = {
   reports: 'enableReports',
   order_taking: 'enablePosOrdering',
   staff: 'enableStaffRoster',
+};
+
+// ── §10: route-level BUSINESS-CAPABILITY guards ──
+// Hiding sidebar entries is UX only. This map blocks the screen entirely when
+// the tenant's business type lacks the capability — a retail user typing
+// /kitchen or /tables into the URL bar is redirected, never shown the page.
+// The backend requireBusinessCapability gates remain the final authority.
+const SCREEN_BUSINESS_CAPABILITY = {
+  orders: 'kitchen',      // Kitchen Tickets
+  tables: 'tables',       // Floors & Tables
 };
 
 // ── Super Admin screens never need module visibility checks ──
@@ -420,6 +431,18 @@ export default function AppShell() {
         const bestScreen = findBestAvailableScreen(settings, userRole, subscription);
         setScreen(bestScreen);
         return;
+      }
+      // §10: business-capability guard — checked BEFORE module visibility so
+      // even an enabled toggle cannot expose a screen the business type
+      // doesn't support (e.g. Kitchen Tickets for a supermarket).
+      const requiredCapability = SCREEN_BUSINESS_CAPABILITY[currentScreen];
+      if (requiredCapability) {
+        const caps = settings?.capabilities || getBusinessCapabilities(settings?.businessType);
+        if (caps[requiredCapability] === false) {
+          const bestScreen = findBestAvailableScreen(settings, userRole, subscription);
+          setScreen(bestScreen);
+          return;
+        }
       }
       // Check module visibility setting
       const settingKey = SCREEN_TO_SETTING[currentScreen];
