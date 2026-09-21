@@ -15,6 +15,7 @@ import {
   Mail,
 } from 'lucide-react';
 import { useAuthStore, useSettingsStore, useUiStore, useCartStore } from '../../../store';
+import { getRoleDisplayName } from '../../../utils/permissions';
 
 // ─── Lockout Banner ─────────────────────────────────────────────────────────
 function LockoutBanner({ remaining }) {
@@ -244,19 +245,8 @@ export default function LockScreen() {
     setOrders([]);
   };
 
-  // Format role for display
-  const formatRole = (role) => {
-    if (!role) return 'Staff';
-    const displayMap = {
-      'SUPER_ADMIN': 'Super Admin',
-      'ADMIN': 'Admin',
-      'MANAGER': 'Manager',
-      'CASHIER': 'Cashier',
-      'WAITER': 'Service Staff',
-      'KITCHEN': 'Kitchen Staff',
-    };
-    return displayMap[role.toUpperCase()] || role;
-  };
+  // Format role for display — centralized utility (WAITER → Service Staff)
+  const formatRole = (role) => getRoleDisplayName(role) || 'Staff';
 
   // Get user initials
   const getInitials = () => {

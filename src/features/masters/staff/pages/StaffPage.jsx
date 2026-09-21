@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Plus, Search, X, Edit, Trash, RefreshCw, AlertTriangle, Loader2, Key, Shield, MapPin } from 'lucide-react';
 import { useUiStore, useSettingsStore } from '../../../../store';
 import { userApi } from '../../../../api/user.api';
@@ -7,7 +7,8 @@ import ConfirmationDialog from '../../../../components/ConfirmationDialog';
 import StaffPermissionsModal from '../components/StaffPermissionsModal';
 import AssignFloorsModal from '../components/AssignFloorsModal';
 import { normalizeEmail, emailOptionalError } from '../../../../utils/email';
-import { getBusinessCapabilities } from '../../../../utils/businessCapabilities';
+import { getBusinessCapabilities, getVisibleStaffRoles } from '../../../../utils/businessCapabilities';
+import { getRoleDisplayName } from '../../../../utils/permissions';
 
 const avatarColors = [
   'bg-[#16A34A] text-white', 'bg-[#06B6D4] text-white', 'bg-[#DCFCE7] text-emerald-900',
@@ -27,11 +28,27 @@ const CACHE_TTL = 60000; // 1 minute
 // failed load surfaces as two identical error toasts and duplicate requests.
 let staffLoadInFlight = false;
 
+// Internal UserRole values (never renamed) with user-facing labels from the
+// centralized display utility. VISIBILITY is capability-derived — the tenant's
+// businessType decides which of these appear in the Add/Edit selectors.
+const ALL_STAFF_ROLE_OPTIONS = ['MANAGER', 'CASHIER', 'KITCHEN', 'WAITER'];
+
 export default function StaffPage() {
   const { addToast } = useUiStore();
   // §5: floor/order-mode assignments only apply to table-capable businesses.
   const { settings } = useSettingsStore();
-  const showFloorAccess = (settings.capabilities || getBusinessCapabilities(settings.businessType)).tables === true;
+  const capabilities = settings.capabilities || getBusinessCapabilities(settings.businessType);
+  const showFloorAccess = capabilities.tables === true;
+  // §1/§3: ONE authoritative capability-derived role list — Kitchen Staff never
+  // appears for retail (kitchen=false), Service Staff only where a service
+  // workflow exists. Backend re-validates on create/update (§6).
+  const visibleRoleOptions = useMemo(
+    () => ALL_STAFF_ROLE_OPTIONS.filter((r) => getVisibleStaffRoles(settings.businessType).includes(r)),
+    [settings.businessType]
+  );
+  // Default new-staff role: WAITER where the service workflow exists, else the
+  // first capability-supported role (Manager for retail-only tenants).
+  const defaultNewRole = visibleRoleOptions.includes('WAITER') ? 'WAITER' : visibleRoleOptions[0] || 'MANAGER';
   const [staff, setStaff] = useState(cachedStaff || []);
   const [loading, setLoading] = useState(!cachedStaff);
   const [error, setError] = useState(null);
@@ -61,13 +78,29 @@ export default function StaffPage() {
   // ['TAKEAWAY'] etc. Shown as a chip on the roster card.
   const [orderTypesByUser, setOrderTypesByUser] = useState({});
 
-  // Form
+  // Form — role holds the INTERNAL enum (e.g. 'WAITER'); display labels are
+  // rendered via the centralized utility, never stored in state. Initial
+  // default derives from the tenant's capabilities.
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
-  const [role, setRole] = useState('Service Staff');
+  const [role, setRole] = useState(() =>
+    getVisibleStaffRoles(settings?.businessType).includes('WAITER') ? 'WAITER'
+      : getVisibleStaffRoles(settings?.businessType)[0] || 'MANAGER'
+  );
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [phone, setPhone] = useState('');
+
+  // §4: legacy users with a role unsupported by the current business type
+  // (e.g. KITCHEN in a retail tenant) stay editable — their existing role is
+  // appended to the selector for THIS edit only, never offered for new staff.
+  // MUST live AFTER the editingId/role useState declarations above — it derives
+  // from them (the previous placement before the declarations caused a
+  // temporal-dead-zone ReferenceError that crashed the whole roster).
+  const roleOptionsForForm =
+    editingId && role && !visibleRoleOptions.includes(role)
+      ? [...visibleRoleOptions, role]
+      : visibleRoleOptions;
 
   useEffect(() => {
     const now = Date.now();
@@ -128,10 +161,9 @@ export default function StaffPage() {
     finally { staffLoadInFlight = false; setLoading(false); }
   };
 
-  const mapRoleFromBackend = (role) => {
-    const map = { ADMIN: 'Admin', MANAGER: 'Manager', CASHIER: 'Cashier', WAITER: 'Service Staff', KITCHEN: 'Kitchen Staff' };
-    return map[role] || 'Service Staff';
-  };
+  // Presentation labels come from THE centralized role utility — WAITER
+  // displays as "Service Staff" while the database enum stays WAITER.
+  const mapRoleFromBackend = (role) => getRoleDisplayName(role) || 'Service Staff';
 
   // Floor names + per-staff floor assignments (Part 10 roster chips) and the
   // order-type assignment (Takeaway vs Dine In / Floor) shown as a chip.
@@ -188,10 +220,8 @@ export default function StaffPage() {
     } catch (_) { /* chips are non-critical */ }
   };
 
-  const mapRoleToBackend = (role) => {
-    const map = { Admin: 'ADMIN', Manager: 'MANAGER', Cashier: 'CASHIER', 'Service Staff': 'WAITER', 'Kitchen Staff': 'KITCHEN' };
-    return map[role] || 'WAITER';
-  };
+  // Roles are already internal enums — sent to the backend verbatim.
+  const mapRoleToBackend = (role) => role;
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -246,7 +276,7 @@ export default function StaffPage() {
     setEditingId(null);
     setFirstName('');
     setLastName('');
-    setRole('Service Staff');
+    setRole(defaultNewRole);
     setEmail('');
     setPassword('');
     setPhone('');
@@ -444,7 +474,7 @@ export default function StaffPage() {
                     <button onClick={() => setFloorsMember(member)}
                       className="p-1 bg-slate-100 hover:bg-sky-100 rounded text-slate-500 cursor-pointer" title="Assign Floors"><MapPin className="w-3.5 h-3.5" /></button>
                   )}
-                  <button onClick={() => { setEditingId(member.id); setFirstName(member.firstName); setLastName(member.lastName); setRole(member.role); setPhone(member.phone || ''); setEmail(member.email || ''); setShowModal(true); }}
+                  <button onClick={() => { setEditingId(member.id); setFirstName(member.firstName); setLastName(member.lastName); setRole(member.backendRole || role); setPhone(member.phone || ''); setEmail(member.email || ''); setShowModal(true); }}
                     className="p-1 bg-slate-100 hover:bg-emerald-100 rounded text-slate-500 cursor-pointer" title="Edit"><Edit className="w-3.5 h-3.5" /></button>
                   <button onClick={() => handleOpenReset(member)}
                     className="p-1 bg-slate-100 hover:bg-amber-100 rounded text-slate-500 cursor-pointer" title="Reset Password"><Key className="w-3.5 h-3.5" /></button>
@@ -623,8 +653,8 @@ export default function StaffPage() {
               <div className="space-y-1">
                 <label className="text-[9px] font-bold uppercase text-slate-400">Role</label>
                 <select value={role} onChange={(e) => setRole(e.target.value)} className="w-full h-8 px-1 bg-slate-50 border rounded-lg outline-none">
-                  {['Admin', 'Manager', 'Service Staff', 'Kitchen Staff', 'Cashier'].map(r => (
-                    <option key={r} value={r}>{r}</option>
+                  {roleOptionsForForm.map((r) => (
+                    <option key={r} value={r}>{getRoleDisplayName(r)}</option>
                   ))}
                 </select>
               </div>

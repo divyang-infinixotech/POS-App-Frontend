@@ -39,6 +39,9 @@ export const SCREEN_PERMISSIONS = {
   // Menu Management
   menu: [ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.MANAGER],
   
+  // Discounts & Promotions
+  discounts: [ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.MANAGER],
+  
   // Staff Management
   staff: [ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.MANAGER],
   
@@ -88,6 +91,10 @@ export const ACTION_PERMISSIONS = {
   'menu.edit': [ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.MANAGER],
   'menu.delete': [ROLES.SUPER_ADMIN, ROLES.ADMIN],
   'menu.toggle_availability': [ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.MANAGER],
+
+  // Discount Actions — management uses the existing billing.discount action
+  'discount.view': [ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.MANAGER],
+  'discount.apply': [ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.MANAGER, ROLES.CASHIER],
   
   // Staff Actions
   'staff.create': [ROLES.SUPER_ADMIN, ROLES.ADMIN],
@@ -415,7 +422,11 @@ export const getDefaultScreenForRole = (role) => {
   return ROLE_DEFAULT_SCREENS[upperRole] || 'dashboard';
 };
 
-// ─── Helper: Get role display name ─────────────────────────────────────────
+// ─── Helper: Get role display name (THE single user-facing role label map) ─
+// Every screen that renders a staff role to a user MUST go through this
+// utility. Internal RBAC/database enum values are NEVER changed — WAITER
+// stays WAITER for auth/JWT/staff-discounts; only presentation differs
+// (WAITER → "Service Staff"). Accepts any casing ("waiter" → "Service Staff").
 export const getRoleDisplayName = (role) => {
   const names = {
     SUPER_ADMIN: 'Super Admin',
@@ -425,5 +436,6 @@ export const getRoleDisplayName = (role) => {
     KITCHEN: 'Kitchen Staff',
     WAITER: 'Service Staff',
   };
-  return names[role] || role;
+  if (!role) return role || '';
+  return names[String(role).toUpperCase()] || role;
 };

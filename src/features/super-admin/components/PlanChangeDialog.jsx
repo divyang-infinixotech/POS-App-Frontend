@@ -32,10 +32,13 @@ export default function PlanChangeDialog({ restaurant, subscription, plans, mode
   // Business-type eligibility: the SAME filter used by onboarding and the
   // restaurant subscription page (mirrors the backend resolver). The backend
   // still re-validates on changeSubscriptionPlan — this only stops the SA
-  // from selecting an incompatible plan in the first place.
+  // from selecting an incompatible plan in the first place. The tenant's
+  // CURRENT plan always stays listed (legacy same-plan renewal exemption).
   const eligiblePlans = useMemo(
-    () => filterPlansForBusinessType(plans || [], restaurant?.businessType),
-    [plans, restaurant?.businessType]
+    () => filterPlansForBusinessType(plans || [], restaurant?.businessType, {
+      includePlanId: restaurant?.subscription?.planId ?? restaurant?.planId ?? null,
+    }),
+    [plans, restaurant?.businessType, restaurant?.subscription?.planId, restaurant?.planId]
   );
 
   const availablePlans = useMemo(() => {

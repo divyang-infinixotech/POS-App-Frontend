@@ -4,6 +4,7 @@ import { Users, Activity, Tag } from 'lucide-react';
 import { formatCurrency } from '../../../lib/utils';
 import ReportExportBar from '../../../components/common/ReportExportBar';
 import { useSettingsStore } from '../../../store';
+import { getRoleDisplayName } from '../../../utils/permissions';
 
 const chartFont = { family: "'Inter', 'Segoe UI', sans-serif", size: 9 };
 const chartDefaults = { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } };
@@ -50,7 +51,7 @@ export default function StaffReports({ staffSales, staffActivity, staffDiscountC
           )}
           <div className="bg-white rounded-[18px] border border-slate-200 shadow-xs overflow-hidden">
             <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between"><p className="text-xs font-extrabold text-slate-800">Staff Sales ({sales.length})</p>
-              <ReportExportBar title="Staff Sales" columns={[{ key: 'name', label: 'Staff' }, { key: 'role', label: 'Role' }, { key: 'orderCount', label: 'Orders', format: 'number' }, { key: 'totalSales', label: 'Total Sales', format: 'currency' }, { key: 'averageOrder', label: 'Avg Order', format: 'currency' }]} data={sales} />
+              <ReportExportBar title="Staff Sales" columns={[{ key: 'name', label: 'Staff' }, { key: 'role', label: 'Role' }, { key: 'orderCount', label: 'Orders', format: 'number' }, { key: 'totalSales', label: 'Total Sales', format: 'currency' }, { key: 'averageOrder', label: 'Avg Order', format: 'currency' }]} data={sales.map(s => ({ ...s, role: getRoleDisplayName(s.role) || s.role }))} />
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-[10px]">
@@ -65,7 +66,7 @@ export default function StaffReports({ staffSales, staffActivity, staffDiscountC
                   {sales.map((s, i) => (
                     <tr key={s.staffId || i} className="border-b border-slate-50 hover:bg-slate-50">
                       <td className="py-2.5 px-3 font-bold text-slate-700">{s.name}</td>
-                      <td className="py-2.5 px-3"><span className="text-[8px] font-bold px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-600">{s.role}</span></td>
+                      <td className="py-2.5 px-3"><span className="text-[8px] font-bold px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-600">{getRoleDisplayName(s.role)}</span></td>
                       <td className="py-2.5 px-3 font-mono text-slate-600">{s.orders}</td>
                       <td className="py-2.5 px-3 text-right font-mono font-bold text-slate-800">{fcVal(s.totalSales)}</td>
                       <td className="py-2.5 px-3 text-right font-mono text-slate-600">{fcVal(s.averageOrder)}</td>
@@ -86,7 +87,7 @@ export default function StaffReports({ staffSales, staffActivity, staffDiscountC
               <Activity className="w-3.5 h-3.5 text-blue-600" />
               <p className="text-xs font-extrabold text-slate-800">Staff Activity ({activity.length})</p>
             </div>
-            <ReportExportBar title="Staff Activity" columns={[{ key: 'name', label: 'Staff' }, { key: 'role', label: 'Role' }, { key: 'ordersServed', label: 'Orders Served', format: 'number' }, { key: 'totalSales', label: 'Total Sales', format: 'currency' }, { key: 'lastActive', label: 'Last Active' }]} data={activity.map(a => ({ name: a.name || '-', role: a.role || '-', ordersServed: a.ordersServed || a.orderCount || 0, totalSales: a.totalSales || 0, lastActive: a.lastActive || '-' }))} />
+            <ReportExportBar title="Staff Activity" columns={[{ key: 'name', label: 'Staff' }, { key: 'role', label: 'Role' }, { key: 'ordersServed', label: 'Orders Served', format: 'number' }, { key: 'totalSales', label: 'Total Sales', format: 'currency' }, { key: 'lastActive', label: 'Last Active' }]} data={activity.map(a => ({ name: a.name || '-', role: getRoleDisplayName(a.role) || '-', ordersServed: a.ordersServed || a.orderCount || 0, totalSales: a.totalSales || 0, lastActive: a.lastActive || '-' }))} />
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-[10px]">
@@ -101,7 +102,7 @@ export default function StaffReports({ staffSales, staffActivity, staffDiscountC
                 {activity.map((a, i) => (
                   <tr key={a.staffId || i} className="border-b border-slate-50 hover:bg-slate-50">
                     <td className="py-2.5 px-3 font-bold text-slate-700">{a.name}</td>
-                    <td className="py-2.5 px-3"><span className="text-[8px] font-bold px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-600">{a.role}</span></td>
+                    <td className="py-2.5 px-3"><span className="text-[8px] font-bold px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-600">{getRoleDisplayName(a.role)}</span></td>
                     <td className="py-2.5 px-3">
                       <div className="flex flex-wrap gap-1.5">
                         {Object.entries(a.actions || {}).map(([key, count]) => (

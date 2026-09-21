@@ -808,6 +808,11 @@ export default function MenuPage() {
                   <p className="text-[9px] text-slate-400 font-medium mt-1">
                     SKU: {item.sku} {isKitchenBusiness && item.prepTime && `· Prep: ${item.prepTime}m`}
                   </p>
+                  {/* §8-§10: the REAL tenant-DB barcode (MenuItem.barcode).
+                      Absence stays an absence — no SKU fallback, no placeholder. */}
+                  <p className="text-[9px] text-slate-400 font-medium font-mono truncate">
+                    Barcode: {item.barcode || '—'}
+                  </p>
                   <p className="text-[10px] text-slate-400 font-medium leading-relaxed truncate mt-0.5">{item.description || 'No description.'}</p>
                 </div>
 

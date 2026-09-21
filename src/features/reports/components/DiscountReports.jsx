@@ -13,6 +13,10 @@ export default function DiscountReports({ discountData, cancellationData, loadin
   const dSummary = discountData?.summary || {};
   const dByType = discountData?.discountByType || {};
   const dBills = discountData?.bills || [];
+  // Discounts & Promotions breakdown (§31) — real OrderDiscount history grouped
+  // by promotion type. Amounts are historical snapshots, never recalculated.
+  const promoBreakdown = discountData?.promotionBreakdown || null;
+  const promoCounts = discountData?.promotionCounts || null;
 
   return (
     <div className="space-y-4">
@@ -39,6 +43,26 @@ export default function DiscountReports({ discountData, cancellationData, loadin
               </div>
             ))}
           </div>
+
+          {promoBreakdown && (promoBreakdown.promotion > 0 || promoBreakdown.staff > 0 || promoBreakdown.promoCode > 0 || promoBreakdown.manual > 0) && (
+            <div className="bg-white rounded-[18px] border border-slate-200 p-4 shadow-xs">
+              <h4 className="text-[10px] font-extrabold text-slate-800 uppercase tracking-wider mb-3">Discounts &amp; Promotions Breakdown</h4>
+              <div className="flex flex-wrap gap-3">
+                {[
+                  { key: 'promotion', label: 'Promotion Discount', color: 'text-emerald-600' },
+                  { key: 'staff', label: 'Staff Discount', color: 'text-indigo-600' },
+                  { key: 'promoCode', label: 'Promo Code Discount', color: 'text-purple-600' },
+                  { key: 'manual', label: 'Manual Discount', color: 'text-amber-600' },
+                ].map(({ key, label, color }) => (
+                  <div key={key} className="bg-slate-50 rounded-xl p-3 border border-slate-100 flex-1 min-w-[140px]">
+                    <p className="text-[9px] font-bold uppercase text-slate-400">{label}</p>
+                    <p className={`text-sm font-extrabold ${color}`}>{fcVal(promoBreakdown[key] || 0)}</p>
+                    <p className="text-[10px] font-mono text-slate-500">{promoCounts?.[key] || 0} applied</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {Object.keys(dByType).length > 0 && (
             <div className="bg-white rounded-[18px] border border-slate-200 p-4 shadow-xs">

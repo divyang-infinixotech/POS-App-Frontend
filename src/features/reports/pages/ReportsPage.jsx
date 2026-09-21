@@ -3,7 +3,7 @@ import { reportApi } from '../../../api/report.api';
 import { formatCurrency, formatDate, formatTime } from '../../../lib/utils';
 import { useSettingsStore, useUiStore } from '../../../store';
 import { useSocketEvent } from '../../../hooks/useSocket';
-import { getBusinessCapabilities } from '../../../utils/businessCapabilities';
+import { getBusinessCapabilities, catalogNaming } from '../../../utils/businessCapabilities';
 import {
   TrendingUp, ShoppingBag, CreditCard, Tag, ChefHat, Package, LayoutGrid, Users, BarChart3,
   RefreshCw, AlertTriangle, Loader2,
@@ -49,9 +49,14 @@ export default function ReportsPage() {
   const capabilities = settings.capabilities || getBusinessCapabilities(settings.businessType);
   const showKitchenReports = capabilities.kitchen === true && capabilities.kot === true;
   const showTableReports = capabilities.tables === true && capabilities.floors === true;
+  // §10: catalog-aware tab label — retail tenants see "Products" where food
+  // verticals see "Menu" (same underlying report data, real backend only).
+  const collectionLabel = catalogNaming(settings.businessType).collectionLabel;
   const CATEGORIES = BASE_CATEGORIES.filter((c) =>
     c.key === 'kitchen' ? showKitchenReports :
     c.key === 'tables' ? showTableReports : true
+  ).map((c) =>
+    c.key === 'menu' ? { ...c, label: collectionLabel } : c
   );
 
   // ── Category State ──
@@ -316,7 +321,7 @@ useEffect(() => { loadReports(); }, [loadReports, refreshTrigger]);
             <div>
               <h1 className="text-lg font-extrabold text-[#191c1e]">Reports &amp; Sales</h1>
               <p className="text-[11px] text-slate-500 font-medium mt-0.5">
-                View {capabilities.kitchen === true ? 'restaurant sales' : 'business sales'} performance, order history, payment analytics{showKitchenReports ? ', kitchen performance' : ''} and business insights.
+                View {capabilities.kitchen === true ? 'restaurant sales' : 'business sales'} performance, sales history, payment analytics{showKitchenReports ? ', kitchen performance' : ''} and business insights.
               </p>
             </div>
             <div className="flex items-center gap-1.5">

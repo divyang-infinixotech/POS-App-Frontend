@@ -200,6 +200,11 @@ export const superAdminApi = {
     apiClient.get('/super-admin/email/settings'),
   updateEmailSettings: (data) =>
     apiClient.put('/super-admin/email/settings', data),
+  // Active email provider selection (GRAPH | SMTP) — persisted server-side.
+  getEmailProvider: () =>
+    apiClient.get('/super-admin/email/provider'),
+  updateEmailProvider: (provider) =>
+    apiClient.put('/super-admin/email/provider', { provider }),
   verifyEmailSettings: () =>
     apiClient.post('/super-admin/email/verify'),
   sendTestEmail: (to) =>

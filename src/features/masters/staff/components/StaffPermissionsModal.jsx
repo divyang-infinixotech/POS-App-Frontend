@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { X, Loader2, Shield, ChevronDown, ChevronRight, RotateCcw, Save } from 'lucide-react';
 import { userApi } from '../../../../api/user.api';
-import { STAFF_SCREEN_PERMISSION_KEYS } from '../../../../utils/permissions';
+import { STAFF_SCREEN_PERMISSION_KEYS, getRoleDisplayName } from '../../../../utils/permissions';
 import { useSettingsStore } from '../../../../store';
 import { getBusinessCapabilities, catalogNaming } from '../../../../utils/businessCapabilities';
 
@@ -172,7 +172,7 @@ export default function StaffPermissionsModal({ member, onClose, onSaved }) {
             <Shield className="w-4 h-4 text-[#16A34A]" />
             <div>
               <h4 className="font-extrabold text-xs uppercase tracking-wider text-slate-800">Staff Permissions</h4>
-              <p className="text-[10px] text-slate-500 font-medium">{member?.firstName} {member?.lastName} — {member?.role}</p>
+              <p className="text-[10px] text-slate-500 font-medium">{member?.firstName} {member?.lastName} — {getRoleDisplayName(member?.role)}</p>
             </div>
           </div>
           <button onClick={() => { if (!saving) onClose(); }} className="text-slate-400 hover:text-slate-600 cursor-pointer" disabled={saving}>

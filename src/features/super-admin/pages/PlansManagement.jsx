@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { superAdminApi } from '../../../api/superAdmin.api';
 import { FEATURE_LABELS } from '../../../utils/permissions';
 import ConfirmationDialog from '../../../components/ConfirmationDialog';
+import { PLAN_MODES, modeBadge } from '../../../utils/businessTypes';
 import {
   Package, Plus, Pencil, Trash2, Power, Loader2, RefreshCw, Copy, Search,
   Users, Monitor, Utensils, Printer, HardDrive, Building2, CreditCard,
@@ -26,9 +27,11 @@ const AVAILABLE_RESTAURANT_MODULE_KEYS = [
   'barcode_scanner',
 ];
 
-// ── Central Basic POS capability map (mirrors backend
+// ── Central basic-mode capability map (mirrors backend
 // RESTAURANT_ONLY_MODULES in subscription.config.js — the backend strips
-// these from every Basic-plan payload regardless of what is sent). ──
+// these from every basic-plan payload regardless of what is sent). Both
+// BASIC_POS and QUICK_BILLING share the same module rule: no floors/tables/
+// kitchen (restaurant-only workflow). ──
 const RESTAURANT_ONLY_MODULES = ['floors', 'tables', 'kitchen'];
 const MODULE_LABELS = {
   dashboard: 'Dashboard', pos: 'POS Ordering', billing: 'Billing & Payments',
@@ -42,6 +45,32 @@ const modulesForMode = (mode) =>
   mode === 'RESTAURANT'
     ? AVAILABLE_RESTAURANT_MODULE_KEYS
     : AVAILABLE_RESTAURANT_MODULE_KEYS.filter((k) => !RESTAURANT_ONLY_MODULES.includes(k));
+
+// The THREE plan-mode definitions (stable enum values = Prisma BusinessMode;
+// labels/capability lines are the only UI copy — never plan names or prices).
+const MODE_CARDS = [
+  {
+    mode: 'RESTAURANT',
+    emoji: '🍽️',
+    label: 'Restaurant',
+    desc: 'Full restaurant operations',
+    details: 'Tables • KOT • Kitchen • Orders • Billing',
+  },
+  {
+    mode: 'BASIC_POS',
+    emoji: '🧾',
+    label: 'Basic POS',
+    desc: 'Quick food-business billing',
+    details: 'Menu • Orders • Billing',
+  },
+  {
+    mode: 'QUICK_BILLING',
+    emoji: '🛒',
+    label: 'Basic / Quick Billing',
+    desc: 'Quick retail billing',
+    details: 'Products • Barcode • Stock',
+  },
+];
 
 const LIMIT_FIELDS = [
   { key: 'maxUsers', label: 'Max Users', icon: Users, hint: 'Leave empty for unlimited' },
@@ -57,7 +86,7 @@ const LIMIT_FIELDS = [
 const EMPTY_PLAN = {
   code: '', name: '', description: '', businessMode: 'RESTAURANT',
   monthlyPrice: 0, yearlyPrice: 0,
-  billingCycle: 'MONTHLY', trialDays: 0,
+  billingCycle: 'YEARLY', trialDays: 0,
   maxUsers: '', maxTables: '', maxFloors: '', maxMenuItems: '', maxPrinters: '',
   maxBranches: '', maxOrdersPerMonth: '', storageLimitMB: '',
   isActive: true, isDefault: false, sortOrder: 0,
@@ -104,6 +133,15 @@ const PlanFormModal = ({ plan, onClose, onSaved }) => {
       setSelectedModules((prev) => {
         const filtered = new Set([...prev].filter((k) => !RESTAURANT_ONLY_MODULES.includes(k)));
         return filtered;
+      });
+    }
+    // EDIT of an existing plan created before a mode existed: its stored
+    // feature list may contain restaurant-only modules that the (new) basic
+    // mode forbids — drop them so the payload never contradicts the mode.
+    if (key === 'businessMode') {
+      setSelectedModules((prev) => {
+        const allowed = modulesForMode(val);
+        return new Set([...prev].filter((k) => allowed.includes(k)));
       });
     }
     return next;
@@ -204,11 +242,21 @@ const PlanFormModal = ({ plan, onClose, onSaved }) => {
               </div>
               <div>
                 <label className={labelCls}>Billing Cycle</label>
-                <select value={form.billingCycle} onChange={(e) => set('billingCycle', e.target.value)} className={inputCls}>
-                  <option value="MONTHLY">Monthly</option>
+                {/* Yearly-only platform (spec §13): existing plans keep their stored
+                    cycle for historical compatibility, but no NEW plan can be
+                    monthly. */}
+                <select
+                  value={form.billingCycle}
+                  onChange={(e) => set('billingCycle', e.target.value)}
+                  className={inputCls}
+                  disabled={isEdit && form.billingCycle !== 'YEARLY' && form.billingCycle !== 'ONCE'}
+                >
                   <option value="YEARLY">Yearly</option>
                   <option value="ONCE">One Time</option>
                 </select>
+                {isEdit && form.billingCycle === 'MONTHLY' && (
+                  <p className="text-[9px] font-bold text-amber-600 mt-1">Legacy monthly plan — the purchase flow is yearly-only.</p>
+                )}
               </div>
               <div>
                 <label className={labelCls}>Trial Days</label>
@@ -221,15 +269,12 @@ const PlanFormModal = ({ plan, onClose, onSaved }) => {
             </div>
           </div>
 
-          {/* Business Mode */}
+          {/* Business Mode — exactly THREE modes */}
           <div>
             <p className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500 mb-1">Business Mode</p>
             <p className="text-[10px] text-slate-400 mb-3">Choose the POS experience provided by this subscription plan.</p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {[
-                { mode: 'RESTAURANT', label: 'Restaurant', desc: 'Full restaurant operations', details: 'Tables • KOT • Kitchen • Orders', emoji: '🍽️' },
-                { mode: 'BASIC_POS', label: 'Basic POS', desc: 'Quick billing', details: 'No tables • No KOT', emoji: '🧾' },
-              ].map(({ mode, label, desc, details, emoji }) => (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {MODE_CARDS.map(({ mode, label, desc, details, emoji }) => (
                 <button
                   type="button"
                   key={mode}
@@ -308,9 +353,11 @@ const PlanFormModal = ({ plan, onClose, onSaved }) => {
               <p className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500">Plan Entitlements</p>
             </div>
             <p className="text-[10px] text-slate-400 mb-3">Select the modules this plan includes. Restaurants on this plan can toggle these modules on/off; excluded modules are blocked server-side.</p>
-            {form.businessMode === 'BASIC_POS' && (
+            {form.businessMode !== 'RESTAURANT' && (
               <p className="text-[10px] font-bold text-amber-600 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 mb-2">
-                Basic POS plan — Restaurant-only modules (Floor Management, Table Management, Kitchen/KOT) are not applicable and are hidden.
+                {form.businessMode === 'BASIC_POS'
+                  ? 'Basic POS plan — Restaurant-only modules (Floor Management, Table Management, Kitchen/KOT) are not applicable and are hidden.'
+                  : 'Basic / Quick Billing plan — Restaurant-only modules (Floor Management, Table Management, Kitchen/KOT) are not applicable and are hidden.'}
               </p>
             )}
             <div className="bg-slate-50 rounded-xl p-4 border border-slate-100 grid grid-cols-2 md:grid-cols-3 gap-2">
@@ -381,7 +428,7 @@ export default function PlansManagement() {
   const [view, setView] = useState('cards');
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
-  const [modeFilter, setModeFilter] = useState('all'); // all | RESTAURANT | BASIC_POS
+  const [modeFilter, setModeFilter] = useState('all'); // all | RESTAURANT | BASIC_POS | QUICK_BILLING
   const [sortBy, setSortBy] = useState('sortOrder');
   const [sortDir, setSortDir] = useState('asc');
   const [toast, setToast] = useState('');
@@ -528,7 +575,8 @@ export default function PlansManagement() {
         <select value={modeFilter} onChange={(e) => setModeFilter(e.target.value)} className="h-8 px-2.5 bg-slate-50 border border-slate-200 rounded-lg text-[11px] font-bold text-slate-600 outline-none" title="Filter by Business / Plan Mode">
           <option value="all">All Modes</option>
           <option value="RESTAURANT">Restaurant Mode</option>
-          <option value="BASIC_POS">Basic Mode</option>
+          <option value="BASIC_POS">Basic POS Mode</option>
+          <option value="QUICK_BILLING">Basic / Quick Billing Mode</option>
         </select>
         <select value={sortBy} onChange={(e) => { setSortBy(e.target.value); }} className="h-8 px-2.5 bg-slate-50 border border-slate-200 rounded-lg text-[11px] font-bold text-slate-600 outline-none">
           {SORT_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
@@ -592,10 +640,12 @@ export default function PlansManagement() {
                   <div className="flex items-center justify-between text-[10px]">
                     <span className="font-semibold text-slate-400">Business Mode</span>
                     <span className={`font-extrabold text-[9px] px-2 py-0.5 rounded-full uppercase tracking-wider ${
-                      (plan.businessMode || 'RESTAURANT') === 'BASIC_POS'
-                        ? 'bg-amber-50 text-amber-600 border border-amber-200'
-                        : 'bg-[#16A34A]/10 text-[#16A34A] border border-[#16A34A]/20'
-                    }`}> {(plan.businessMode || 'RESTAURANT') === 'BASIC_POS' ? 'BASIC POS' : 'RESTAURANT'} </span>
+                      (plan.businessMode || 'RESTAURANT') === 'RESTAURANT'
+                        ? 'bg-[#16A34A]/10 text-[#16A34A] border border-[#16A34A]/20'
+                        : (plan.businessMode || 'RESTAURANT') === 'BASIC_POS'
+                          ? 'bg-amber-50 text-amber-600 border border-amber-200'
+                          : 'bg-cyan-50 text-cyan-600 border border-cyan-200'
+                    }`}> {modeBadge(plan.businessMode || 'RESTAURANT')} </span>
                   </div>
                   {LIMIT_FIELDS.slice(0, 4).map((f) => (
                     <div key={f.key} className="flex items-center justify-between text-[10px]">
@@ -678,11 +728,13 @@ export default function PlansManagement() {
                       <td className="py-3 px-4 font-bold text-slate-600">{fmtPrice(plan.yearlyPrice)}</td>
                       <td className="py-3 px-4">
                         <span className={`inline-flex items-center gap-1 text-[9px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider ${
-                          (plan.businessMode || 'RESTAURANT') === 'BASIC_POS'
-                            ? 'bg-amber-50 text-amber-600 border border-amber-200'
-                            : 'bg-[#16A34A]/10 text-[#16A34A] border border-[#16A34A]/20'
+                          (plan.businessMode || 'RESTAURANT') === 'RESTAURANT'
+                            ? 'bg-[#16A34A]/10 text-[#16A34A] border border-[#16A34A]/20'
+                            : (plan.businessMode || 'RESTAURANT') === 'BASIC_POS'
+                              ? 'bg-amber-50 text-amber-600 border border-amber-200'
+                              : 'bg-cyan-50 text-cyan-600 border border-cyan-200'
                         }`}>
-                          {(plan.businessMode || 'RESTAURANT') === 'BASIC_POS' ? 'BASIC POS' : 'RESTAURANT'}
+                          {modeBadge(plan.businessMode || 'RESTAURANT')}
                         </span>
                       </td>
                       <td className="py-3 px-4 text-center">

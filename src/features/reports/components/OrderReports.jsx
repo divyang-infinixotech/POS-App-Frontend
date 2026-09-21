@@ -11,9 +11,14 @@ const chartDefaults = { responsive: true, maintainAspectRatio: false, plugins: {
 const STATUS_COLORS = { COMPLETED: '#16A34A', PREPARING: '#2563EB', READY: '#D97706', PENDING: '#64748B', CANCELLED: '#DC2626' };
 
 export default function OrderReports({ orderReportData, cancellationData, loading, formatCurrency: fc, formatDate: fd, formatTime: ft }) {
-  // §9: kitchen terminology only for kitchen-capable businesses
+  // §7/§8/§11: kitchen/order-workflow terminology ONLY for kitchen-capable
+  // businesses (server-resolved capability, never a businessType check).
+  // Retail tenants get a direct-sales view: no Pending/Preparing/Ready states,
+  // no "Order Status" restaurant doughnut — real data only.
   const { settings } = useSettingsStore();
-  const isKitchenBusiness = (settings.capabilities || getBusinessCapabilities(settings.businessType)).kitchen === true;
+  const businessCaps = settings.capabilities || getBusinessCapabilities(settings.businessType);
+  const isKitchenBusiness = businessCaps.kitchen === true;
+  const showTablesColumn = businessCaps.tables === true;
   const [subTab, setSubTab] = useState('register');
   const [orderPage, setOrderPage] = useState(1);
   const orderPageSize = 10;
@@ -22,13 +27,16 @@ export default function OrderReports({ orderReportData, cancellationData, loadin
   const fdVal = fd || formatDate;
   const ftVal = ft || formatTime;
 
-  const subTabs = [
+  const allSubTabs = [
     { key: 'register', label: 'Order Register' },
     { key: 'completed', label: 'Completed' },
-    { key: 'pending', label: 'Pending' },
+    // §7: "Pending" represents the kitchen/order workflow — retail Basic POS
+    // has no pending/held transaction feature, so the tab is removed there.
+    { key: 'pending', label: 'Pending', kitchenOnly: true },
     { key: 'cancelled', label: 'Cancelled' },
     { key: 'type', label: 'Order Type' },
   ];
+  const subTabs = allSubTabs.filter((t) => !t.kitchenOnly || isKitchenBusiness);
 
   const summary = orderReportData?.summary || {};
   const orders = orderReportData?.orders || [];
@@ -43,12 +51,26 @@ export default function OrderReports({ orderReportData, cancellationData, loadin
     CANCELLED: summary.cancelledCount || 0,
   }), [summary]);
 
-  const orderStatusChartData = useMemo(() => ({
-    labels: ['Completed', 'Preparing', 'Ready', 'Pending', 'Cancelled'],
-    datasets: [{ data: [orderStatusSummary.COMPLETED, orderStatusSummary.PREPARING, orderStatusSummary.READY, orderStatusSummary.PENDING, orderStatusSummary.CANCELLED],
-      backgroundColor: [STATUS_COLORS.COMPLETED, STATUS_COLORS.PREPARING, STATUS_COLORS.READY, STATUS_COLORS.PENDING, STATUS_COLORS.CANCELLED],
-      borderWidth: 0, cutout: '65%' }],
-  }), [orderStatusSummary]);
+  // §11: restaurant businesses keep the Order Status doughnut (kitchen
+  // workflow states). Retail gets a real-data "Sales Outcome" doughnut built
+  // from the SAME full-range summary the backend already returns — completed
+  // vs cancelled sales. No fabricated states, no new API.
+  const orderStatusChartData = useMemo(() => {
+    if (!isKitchenBusiness) {
+      return {
+        labels: ['Completed', 'Cancelled'],
+        datasets: [{ data: [orderStatusSummary.COMPLETED, orderStatusSummary.CANCELLED],
+          backgroundColor: [STATUS_COLORS.COMPLETED, STATUS_COLORS.CANCELLED],
+          borderWidth: 0, cutout: '65%' }],
+      };
+    }
+    return {
+      labels: ['Completed', 'Preparing', 'Ready', 'Pending', 'Cancelled'],
+      datasets: [{ data: [orderStatusSummary.COMPLETED, orderStatusSummary.PREPARING, orderStatusSummary.READY, orderStatusSummary.PENDING, orderStatusSummary.CANCELLED],
+        backgroundColor: [STATUS_COLORS.COMPLETED, STATUS_COLORS.PREPARING, STATUS_COLORS.READY, STATUS_COLORS.PENDING, STATUS_COLORS.CANCELLED],
+        borderWidth: 0, cutout: '65%' }],
+    };
+  }, [orderStatusSummary, isKitchenBusiness]);
 
   // Filter orders by status for sub-tabs
   const filteredOrders = useMemo(() => {
@@ -83,11 +105,13 @@ export default function OrderReports({ orderReportData, cancellationData, loadin
         ))}
       </div>
 
-      {/* KPI Cards */}
+      {/* KPI Cards — §7: restaurant workflow states only where the kitchen
+          capability exists. Retail sees Completed / Cancelled / In Progress
+          with real counts, never a kitchen "Pending" card. */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {[
           { label: 'Completed', value: orderStatusSummary.COMPLETED, icon: CheckCircle, color: 'border-emerald-200', textColor: 'text-[#16A34A]' },
-          { label: 'Pending', value: orderStatusSummary.PENDING, icon: Clock, color: 'border-slate-200', textColor: 'text-slate-600' },
+          ...(isKitchenBusiness ? [{ label: 'Pending', value: orderStatusSummary.PENDING, icon: Clock, color: 'border-slate-200', textColor: 'text-slate-600' }] : []),
           { label: 'Cancelled', value: orderStatusSummary.CANCELLED, icon: XCircle, color: 'border-red-200', textColor: 'text-red-600' },
           // §9: "Kitchen" is food terminology — retail sees the neutral "In Progress"
           { label: isKitchenBusiness ? 'Kitchen' : 'In Progress', value: orderStatusSummary.PREPARING + orderStatusSummary.READY, icon: Timer, color: 'border-blue-200', textColor: 'text-blue-600' },
@@ -105,7 +129,7 @@ export default function OrderReports({ orderReportData, cancellationData, loadin
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <div className="bg-white rounded-[18px] border border-slate-200 p-4 shadow-xs">
           <h4 className="text-[10px] font-extrabold text-slate-800 uppercase tracking-wider mb-3 flex items-center gap-1.5">
-            <BarChart3 className="w-3.5 h-3.5 text-blue-600" /> Order Status
+            <BarChart3 className="w-3.5 h-3.5 text-blue-600" /> {isKitchenBusiness ? 'Order Status' : 'Sales Outcome'}
           </h4>
           <div className="h-48 flex items-center justify-center">
             <Doughnut data={orderStatusChartData} options={{ ...chartDefaults, cutout: '60%', plugins: { ...chartDefaults.plugins, legend: { display: true, position: 'right', labels: { font: chartFont, color: '#475569', boxWidth: 10, padding: 8 } } } }} />
@@ -136,7 +160,12 @@ export default function OrderReports({ orderReportData, cancellationData, loadin
           <p className="text-xs font-extrabold text-slate-800">{filteredOrders.length} orders</p>
           <ReportExportBar
             title={subTab === 'completed' ? 'Completed Orders' : subTab === 'pending' ? 'Pending Orders' : subTab === 'cancelled' ? 'Cancelled Orders' : subTab === 'type' ? 'Order Type Report' : 'Order Register'}
-            columns={[{ key: 'orderNo', label: 'Order No' }, { key: 'date', label: 'Date/Time' }, { key: 'orderType', label: 'Type' }, { key: 'table', label: 'Table' }, { key: 'customer', label: 'Customer' }, { key: 'itemsCount', label: 'Items', format: 'number' }, { key: 'status', label: 'Status' }, { key: 'subtotal', label: 'Subtotal', format: 'currency' }, { key: 'discount', label: 'Discount', format: 'currency' }, { key: 'taxAmount', label: 'Tax', format: 'currency' }, { key: 'totalAmount', label: 'Total', format: 'currency' }, { key: 'payment', label: 'Payment' }]}
+            columns={[
+              { key: 'orderNo', label: 'Order No' }, { key: 'date', label: 'Date/Time' }, { key: 'orderType', label: 'Type' },
+              // §7: Table column only for table-capable businesses
+              ...(showTablesColumn ? [{ key: 'table', label: 'Table' }] : []),
+              { key: 'customer', label: 'Customer' }, { key: 'itemsCount', label: 'Items', format: 'number' }, { key: 'status', label: 'Status' }, { key: 'subtotal', label: 'Subtotal', format: 'currency' }, { key: 'discount', label: 'Discount', format: 'currency' }, { key: 'taxAmount', label: 'Tax', format: 'currency' }, { key: 'totalAmount', label: 'Total', format: 'currency' }, { key: 'payment', label: 'Payment' }]
+            }
             data={filteredOrders.map(o => ({ orderNo: `#${o.orderNo || o.id}`, date: `${fdVal(o.createdAt)} ${ftVal(o.createdAt)}`, orderType: o.orderType || '-', table: o.table?.tableNo ? `T${o.table.tableNo}` : (o.orderType === 'TAKEAWAY' ? 'TW' : '-'), customer: o.customer?.name || '-', itemsCount: o.itemsCount || '-', status: o.status, subtotal: o.subtotal || 0, discount: o.discount || 0, taxAmount: o.taxAmount || 0, totalAmount: o.totalAmount || 0, payment: o.bill?.paymentMethod || '-' }))}
             dateRange={{}}
           />
@@ -145,7 +174,7 @@ export default function OrderReports({ orderReportData, cancellationData, loadin
           <table className="w-full text-[10px]">
             <thead className="bg-slate-50">
               <tr>
-                {['Order No', 'Date/Time', 'Type', 'Table', 'Customer', 'Items', 'Status', 'Subtotal', 'Discount', 'Tax', 'Total', 'Payment'].map(h => (
+                {['Order No', 'Date/Time', 'Type', ...(showTablesColumn ? ['Table'] : []), 'Customer', 'Items', 'Status', 'Subtotal', 'Discount', 'Tax', 'Total', 'Payment'].map(h => (
                   <th key={h} className={`py-2.5 px-3 text-[9px] font-bold uppercase text-slate-500 ${['Subtotal', 'Discount', 'Tax', 'Total'].includes(h) ? 'text-right' : ['Items', 'Status'].includes(h) ? 'text-center' : 'text-left'}`}>{h}</th>
                 ))}
               </tr>
@@ -159,7 +188,7 @@ export default function OrderReports({ orderReportData, cancellationData, loadin
                     <div className="text-slate-400">{ftVal(o.createdAt)}</div>
                   </td>
                   <td className="py-2.5 px-3"><span className="text-[8px] font-bold px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-600">{o.orderType || '-'}</span></td>
-                  <td className="py-2.5 px-3 text-slate-600">{o.table?.tableNo ? `T${o.table.tableNo}` : (o.orderType === 'TAKEAWAY' ? 'TW' : '-')}</td>
+                  {showTablesColumn && <td className="py-2.5 px-3 text-slate-600">{o.table?.tableNo ? `T${o.table.tableNo}` : (o.orderType === 'TAKEAWAY' ? 'TW' : '-')}</td>}
                   <td className="py-2.5 px-3 text-slate-600 text-[9px]">{o.customer?.name || '-'}</td>
                   <td className="py-2.5 px-3 text-center font-mono text-slate-600">{o.itemsCount || '-'}</td>
                   <td className="py-2.5 px-3 text-center">
@@ -172,7 +201,7 @@ export default function OrderReports({ orderReportData, cancellationData, loadin
                   <td className="py-2.5 px-3 text-center"><span className="text-[8px] font-bold px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-600">{o.bill?.paymentMethod || '-'}</span></td>
                 </tr>
               ))}
-              {filteredOrders.length === 0 && <tr><td colSpan={12} className="py-10 text-center text-slate-400 italic">No orders found</td></tr>}
+              {filteredOrders.length === 0 && <tr><td colSpan={showTablesColumn ? 12 : 11} className="py-10 text-center text-slate-400 italic">No orders found</td></tr>}
             </tbody>
           </table>
         </div>

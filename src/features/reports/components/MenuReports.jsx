@@ -5,6 +5,7 @@ import { formatCurrency } from '../../../lib/utils';
 import { PLACEHOLDER_IMAGE } from '../../../lib/imagePlaceholder';
 import ReportExportBar from '../../../components/common/ReportExportBar';
 import { useSettingsStore } from '../../../store';
+import { catalogNaming } from '../../../utils/businessCapabilities';
 
 const chartFont = { family: "'Inter', 'Segoe UI', sans-serif", size: 9 };
 const chartDefaults = { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } };
@@ -15,6 +16,10 @@ export default function MenuReports({ menuPerformance, topSelling, lowSelling, c
   const fcVal = fc || formatCurrency;
   const { settings } = useSettingsStore();
   const currencySymbol = settings?.currencySymbol || '₹';
+  // §10: catalog-aware wording — "Menu" for food verticals, "Products" for
+  // retail (via the centralized catalogNaming utility, no businessType checks).
+  const naming = catalogNaming(settings?.businessType);
+  const itemLabel = naming.itemLabel;
 
   if (loading) return null;
 
@@ -41,7 +46,7 @@ export default function MenuReports({ menuPerformance, topSelling, lowSelling, c
   return (
     <div className="space-y-4">
       <div className="flex bg-slate-100 p-0.5 rounded-lg border border-slate-200 text-[10px] font-bold overflow-x-auto no-scrollbar">
-        {[{ key: 'performance', label: 'Menu Performance' }, { key: 'top', label: 'Top Selling' }, { key: 'low', label: 'Low Selling' }, { key: 'category', label: 'Category Performance' }].map(t => (
+        {[{ key: 'performance', label: `${itemLabel} Performance` }, { key: 'top', label: 'Top Selling' }, { key: 'low', label: 'Low Selling' }, { key: 'category', label: 'Category Performance' }].map(t => (
           <button key={t.key} onClick={() => setSubTab(t.key)}
             className={`px-3 py-1.5 rounded-md transition-all cursor-pointer shrink-0 ${subTab === t.key ? 'bg-white text-slate-800 shadow-xs' : 'text-slate-500 hover:text-slate-700'}`}>
             {t.label}
@@ -52,9 +57,9 @@ export default function MenuReports({ menuPerformance, topSelling, lowSelling, c
       {subTab === 'performance' && (
         <div className="bg-white rounded-[18px] border border-slate-200 shadow-xs overflow-hidden">
           <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
-            <p className="text-xs font-extrabold text-slate-800">All Menu Items ({items.length})</p>
+            <p className="text-xs font-extrabold text-slate-800">All {itemLabel} ({items.length})</p>
             <ReportExportBar
-              title="Menu Performance"
+              title={`${itemLabel} Performance`}
               columns={[{ key: 'name', label: 'Item' }, { key: 'category', label: 'Category' }, { key: 'quantitySold', label: 'Qty Sold', format: 'number' }, { key: 'revenue', label: 'Revenue', format: 'currency' }, { key: 'orderCount', label: 'Orders', format: 'number' }, { key: 'averageSellingPrice', label: 'Avg Price', format: 'currency' }]}
               data={items}
             />
@@ -85,7 +90,7 @@ export default function MenuReports({ menuPerformance, topSelling, lowSelling, c
                     <td className="py-2 px-2.5 text-right"><span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700">{i.contributionPercentage}%</span></td>
                   </tr>
                 ))}
-                {items.length === 0 && <tr><td colSpan={7} className="py-10 text-center text-slate-400 italic">No menu data</td></tr>}
+                {items.length === 0 && <tr><td colSpan={7} className="py-10 text-center text-slate-400 italic">No data</td></tr>}
               </tbody>
             </table>
           </div>

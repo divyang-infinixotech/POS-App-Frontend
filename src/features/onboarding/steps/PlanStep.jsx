@@ -137,7 +137,11 @@ export default function PlanStep({ onBack, onDone, onExitToLogin }) {
                 {plan.limits && (
                   <div className="mt-3 grid grid-cols-2 gap-1.5">
                     <Limit icon={Users} label="Users" value={plan.limits.maxUsers} />
-                    <Limit icon={LayoutGrid} label="Tables" value={plan.limits.maxTables} />
+                    {/* Tables/Menu limits are restaurant-workflow concepts — never
+                        shown for basic plans (no dine-in UI to limit). */}
+                    {(plan.businessMode || 'RESTAURANT') === 'RESTAURANT' && (
+                      <Limit icon={LayoutGrid} label="Tables" value={plan.limits.maxTables} />
+                    )}
                     <Limit icon={UtensilsCrossed} label="Menu items" value={plan.limits.maxMenuItems} />
                     <Limit icon={ReceiptText} label="Orders/mo" value={plan.limits.maxOrdersPerMonth} />
                   </div>

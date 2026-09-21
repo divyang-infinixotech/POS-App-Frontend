@@ -3,6 +3,7 @@ import { superAdminApi } from '../../../api/superAdmin.api';
 import { Search, RefreshCw, Loader2, CheckCircle, XCircle, RotateCcw, Trash2, ChevronLeft, ChevronRight, Users, Filter } from 'lucide-react';
 import ConfirmationDialog from '../../../components/ConfirmationDialog';
 import { useUiStore } from '../../../store';
+import { getRoleDisplayName } from '../../../utils/permissions';
 
 export default function UserManagement() {
   const { addToast } = useUiStore();
@@ -123,7 +124,7 @@ export default function UserManagement() {
                   <td className="py-3 px-4 font-bold text-slate-700">{u.name}</td>
                   <td className="py-3 px-4 text-slate-500">{u.email}</td>
                   <td className="py-3 px-4">
-                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">{u.role}</span>
+                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">{getRoleDisplayName(u.role)}</span>
                   </td>
                   <td className="py-3 px-4 text-slate-500">{u.restaurant?.name || '—'}</td>
                   <td className="py-3 px-4">

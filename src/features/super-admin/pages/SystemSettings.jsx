@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { superAdminApi } from '../../../api/superAdmin.api';
-import { Loader2, Save, RefreshCw, RotateCcw, Shield, AlertTriangle, Mail, Send, CheckCircle2, XCircle } from 'lucide-react';
+import { Loader2, Save, RefreshCw, RotateCcw, Shield, AlertTriangle, Mail, Send, CheckCircle2, XCircle, Cloud } from 'lucide-react';
 import ConfirmationDialog from '../../../components/ConfirmationDialog';
 
 // Backend masks configured secrets with this marker — the UI treats it as
@@ -41,16 +41,19 @@ export default function SystemSettings() {
   const toastTimer = useRef(null);
   const savingRef = useRef(false);
 
-  // ── Email (SMTP) settings state ──
+  // ── Email settings state ──
   // Loaded from the dedicated /super-admin/email/* endpoints — separate from
   // the generic key-value SystemSetting list. The password is ALWAYS rendered
   // masked; submitting the mask preserves the stored encrypted secret.
+  // `emailProvider` is the persisted ACTIVE transport selection (GRAPH | SMTP);
+  // `providerDirty` tracks an uncommitted provider switch (saved explicitly).
   const [emailCfg, setEmailCfg] = useState(null);
   const [emailOriginal, setEmailOriginal] = useState(null);
   const [emailLoading, setEmailLoading] = useState(true);
   const [emailSaving, setEmailSaving] = useState(false);
   const [emailTesting, setEmailTesting] = useState(false);
   const [testRecipient, setTestRecipient] = useState('');
+  const [providerSaving, setProviderSaving] = useState(false);
 
   useEffect(() => { loadEmailSettings(); return () => clearTimeout(toastTimer.current); }, []);
 
@@ -102,7 +105,8 @@ export default function SystemSettings() {
     try {
       const resp = await superAdminApi.verifyEmailSettings();
       const data = resp?.data || resp || {};
-      showToast(data.ok ? 'Email transport verified successfully.' : (data.error || 'Email transport verification failed.'), data.ok ? 'success' : 'error');
+      const providerLabel = data?.provider === 'microsoft-graph' ? 'Microsoft Graph' : 'SMTP';
+      showToast(data.ok ? `${providerLabel} connection verified successfully.` : (data.error || `${providerLabel} verification failed.`), data.ok ? 'success' : 'error');
     } catch (e) {
       showToast(e.message || 'Email transport verification failed', 'error');
     } finally {
@@ -120,11 +124,12 @@ export default function SystemSettings() {
     try {
       const resp = await superAdminApi.sendTestEmail(testRecipient);
       const data = resp?.data || resp || {};
-      // Phase 5: 202 = ACCEPTED, not delivered — never claim delivery.
+      // 202 = ACCEPTED, not delivered — never claim delivery. The toast names
+      // the provider that actually handled the send.
       if (data?.provider === 'microsoft-graph') {
         showToast(`Test email accepted by Microsoft Graph (recipient: ${testRecipient}).`, 'success');
       } else {
-        showToast(`Test email sent to ${testRecipient}.`, 'success');
+        showToast(`Test email sent through SMTP (recipient: ${testRecipient}).`, 'success');
       }
     } catch (e) {
       // Backend error strings are already sanitized & human-readable
@@ -132,6 +137,32 @@ export default function SystemSettings() {
       showToast(e.message || 'Test email failed', 'error');
     } finally {
       setEmailTesting(false);
+    }
+  };
+
+  // Provider switch — persisted server-side (SystemSetting), never localStorage.
+  // The switch takes effect for every future send (queue + cron included).
+  const handleSelectProvider = (provider) => {
+    if (!emailCfg || provider === emailCfg.emailProvider) return;
+    setEmailCfg((prev) => ({ ...prev, emailProvider: provider }));
+  };
+
+  const handleSaveProvider = async () => {
+    if (providerSaving || !emailCfg) return;
+    const target = emailCfg.emailProvider;
+    if (!['GRAPH', 'SMTP'].includes(target)) return;
+    setProviderSaving(true);
+    try {
+      const resp = await superAdminApi.updateEmailProvider(target);
+      const data = resp?.data || resp || {};
+      const next = data.emailProvider || target;
+      setEmailCfg((prev) => ({ ...prev, emailProvider: next }));
+      setEmailOriginal((prev) => ({ ...prev, emailProvider: next }));
+      showToast(`Active email provider set to ${next === 'GRAPH' ? 'Microsoft Graph' : 'SMTP / Gmail'}.`);
+    } catch (e) {
+      showToast(e.message || 'Unable to change email provider', 'error');
+    } finally {
+      setProviderSaving(false);
     }
   };
 
@@ -320,42 +351,88 @@ export default function SystemSettings() {
         </div>
       </div>
 
-      {/* ─── Email (Microsoft Graph) Configuration — dedicated section ─── */}
-      {/* Transport details (Graph vs SMTP) stay backend-only; this screen shows
-          the server-resolved Graph status + non-secret identifiers + the
-          platform-wide notification settings. Secrets are NEVER returned. */}
+      {/* ─── Email Configuration — dedicated section (both providers) ─── */}
+      {/* Shows the ACTIVE provider (server-persisted), the selected provider's
+          configuration, and platform-wide notification settings. Secrets are
+          NEVER returned by the backend — configured flags only. */}
       <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-4">
         <div className="flex items-center justify-between gap-2 flex-wrap">
           <div className="flex items-center gap-2">
             <Mail className="w-4 h-4 text-slate-500" />
             <div>
-              <h2 className="text-sm font-extrabold text-slate-800">Email (Microsoft Graph) Configuration</h2>
+              <h2 className="text-sm font-extrabold text-slate-800">Email Configuration</h2>
               <p className="text-[10px] font-semibold text-slate-400">
                 Used for verification codes, application updates and admin notifications.
                 Email verification for onboarding is always mandatory and never disabled.
               </p>
             </div>
           </div>
-          {/* Status badge — derived from the BACKEND configuration/status response.
-              ENABLED = flag on + all four values present; INCOMPLETE = flag on
-              but configuration missing; DISABLED = legacy SMTP transport. */}
-          {emailCfg?.graph && (
+          {/* Active-provider badge — derived from the BACKEND status response. */}
+          {emailCfg && (
             <span className={`text-[10px] font-bold rounded-full px-2.5 py-1 border ${
-              emailCfg.graph.status === 'ENABLED' ? 'bg-green-50 border-green-200 text-green-700'
-              : emailCfg.graph.status === 'INCOMPLETE' ? 'bg-amber-50 border-amber-200 text-amber-700'
-              : 'bg-slate-50 border-slate-200 text-slate-500'}`}>
-              {emailCfg.graph.status === 'ENABLED' ? 'Microsoft Graph Enabled'
-                : emailCfg.graph.status === 'INCOMPLETE' ? 'Configuration Incomplete'
-                : 'Microsoft Graph Disabled'}
+              emailCfg.emailProvider === 'GRAPH'
+                ? (emailCfg.graph?.status === 'ENABLED' ? 'bg-green-50 border-green-200 text-green-700'
+                  : emailCfg.graph?.status === 'INCOMPLETE' ? 'bg-amber-50 border-amber-200 text-amber-700'
+                  : 'bg-red-50 border-red-200 text-red-700')
+                : (emailCfg.smtp?.status === 'CONFIGURED' ? 'bg-green-50 border-green-200 text-green-700'
+                  : emailCfg.smtp?.status === 'NOT_CONFIGURED' ? 'bg-red-50 border-red-200 text-red-700'
+                  : 'bg-amber-50 border-amber-200 text-amber-700')}`}>
+              Active: {emailCfg.emailProvider === 'GRAPH'
+                ? (emailCfg.graph?.status === 'ENABLED' ? 'Microsoft Graph'
+                  : emailCfg.graph?.status === 'INCOMPLETE' ? 'Microsoft Graph (incomplete)'
+                  : 'Microsoft Graph (not configured)')
+                : (emailCfg.smtp?.status === 'CONFIGURED' ? 'SMTP / Gmail'
+                  : emailCfg.smtp?.status === 'NOT_CONFIGURED' ? 'SMTP (not configured)'
+                  : 'SMTP (partially configured)')}
             </span>
           )}
         </div>
 
         {emailCfg && (
           <>
-            {/* ── Microsoft Graph (read-only, masked) ── */}
-            {emailCfg.graph && (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {/* ── Active Email Provider selector (persisted server-side) ── */}
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-bold text-slate-600">Active Email Provider</label>
+              <div className="grid grid-cols-2 gap-2 max-w-md">
+                <button type="button" onClick={() => handleSelectProvider('GRAPH')} disabled={emailLoading || providerSaving}
+                  aria-pressed={emailCfg.emailProvider === 'GRAPH'}
+                  className={`h-11 px-3 rounded-xl border-2 text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 disabled:opacity-50 ${
+                    emailCfg.emailProvider === 'GRAPH'
+                      ? 'border-[#16A34A] bg-[#16A34A]/5 text-[#16A34A] shadow-sm'
+                      : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'}`}>
+                  <Cloud className="w-3.5 h-3.5" /> Microsoft Graph
+                </button>
+                <button type="button" onClick={() => handleSelectProvider('SMTP')} disabled={emailLoading || providerSaving}
+                  aria-pressed={emailCfg.emailProvider === 'SMTP'}
+                  className={`h-11 px-3 rounded-xl border-2 text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 disabled:opacity-50 ${
+                    emailCfg.emailProvider === 'SMTP'
+                      ? 'border-[#16A34A] bg-[#16A34A]/5 text-[#16A34A] shadow-sm'
+                      : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'}`}>
+                  <Mail className="w-3.5 h-3.5" /> SMTP / Gmail
+                </button>
+              </div>
+              {emailCfg.emailProvider !== emailOriginal?.emailProvider && (
+                <div className="flex flex-wrap items-center gap-2 pt-1">
+                  <span className="text-[10px] font-bold text-amber-600 flex items-center gap-1">
+                    <AlertTriangle className="w-3 h-3" /> Provider change not saved yet
+                  </span>
+                  <button type="button" onClick={handleSaveProvider} disabled={providerSaving}
+                    className="h-8 px-3 bg-[#16A34A] hover:bg-[#15803D] text-white rounded-lg text-[10px] font-bold transition-all disabled:opacity-40 cursor-pointer flex items-center gap-1.5">
+                    {providerSaving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
+                    Apply Provider
+                  </button>
+                </div>
+              )}
+              <p className="text-[10px] text-slate-400">
+                The active provider handles every platform email — verification codes, approvals, credentials and notifications. Test Email and Verify Connection use it too.
+              </p>
+            </div>
+
+            {/* ── Microsoft Graph configuration (shown when active) ── */}
+            {emailCfg.emailProvider === 'GRAPH' && emailCfg.graph && (
+              <div className="border border-slate-100 rounded-xl p-3.5 space-y-3 bg-slate-50/50">
+                <p className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider">Microsoft Graph Configuration</p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="flex flex-col gap-1.5">
                   <label className="text-xs font-bold text-slate-600">Sender Email</label>
                   <div className="h-11 px-3 py-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 font-mono">
@@ -384,6 +461,69 @@ export default function SystemSettings() {
                   </div>
                   <p className="text-[10px] text-slate-400">Graph credentials are environment-only (backend) — never editable or visible here.</p>
                 </div>
+              </div>
+                {emailCfg.graph.status === 'INCOMPLETE' && (
+                  <p className="text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                    Graph is active but its configuration is incomplete — email sends will fail with a clear provider error until the MICROSOFT_GRAPH_* variables are set. SMTP is never used as a silent fallback.
+                  </p>
+                )}
+              </div>
+            )}
+
+            {/* ── SMTP / Gmail configuration (shown when active) ── */}
+            {emailCfg.emailProvider === 'SMTP' && emailCfg.smtp && (
+              <div className="border border-slate-100 rounded-xl p-3.5 space-y-3 bg-slate-50/50">
+                <p className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider">SMTP / Gmail Configuration</p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="flex flex-col gap-2">
+                    <label className="text-xs font-bold text-slate-600">SMTP Host</label>
+                    <input value={emailCfg.host || ''} onChange={(e) => handleEmailField('host', e.target.value)} disabled={emailSaving}
+                      placeholder="smtp.gmail.com" autoComplete="off"
+                      className="w-full h-11 px-3 bg-white border border-slate-200 rounded-xl text-xs font-semibold outline-none focus:border-[#16A34A] disabled:opacity-50" />
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <label className="text-xs font-bold text-slate-600">SMTP Port</label>
+                    <input type="number" value={emailCfg.port ?? 587} onChange={(e) => handleEmailField('port', Number(e.target.value))} disabled={emailSaving}
+                      placeholder="587"
+                      className="w-full h-11 px-3 bg-white border border-slate-200 rounded-xl text-xs font-semibold outline-none focus:border-[#16A34A] disabled:opacity-50" />
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <label className="text-xs font-bold text-slate-600">SMTP Username</label>
+                    <input value={emailCfg.user || ''} onChange={(e) => handleEmailField('user', e.target.value)} disabled={emailSaving}
+                      placeholder="your@gmail.com" autoComplete="off"
+                      className="w-full h-11 px-3 bg-white border border-slate-200 rounded-xl text-xs font-semibold outline-none focus:border-[#16A34A] disabled:opacity-50" />
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <label className="text-xs font-bold text-slate-600">SMTP Password</label>
+                    <input type="password" value={emailCfg.password || ''} onChange={(e) => handleEmailField('password', e.target.value)} disabled={emailSaving}
+                      placeholder={emailCfg.passwordConfigured ? '•••••••• (stored)' : 'Gmail App Password'} autoComplete="new-password"
+                      className="w-full h-11 px-3 bg-white border border-slate-200 rounded-xl text-xs font-semibold outline-none focus:border-[#16A34A] disabled:opacity-50" />
+                    <p className="text-[10px] text-slate-400 flex items-center gap-1">
+                      <Shield className="w-3 h-3" /> {emailCfg.passwordConfigured
+                        ? 'A password is stored (encrypted). Leave untouched to keep it — type to replace.'
+                        : 'For Gmail, use a 16-character App Password (Google Account → Security → 2-Step Verification → App passwords).'}
+                    </p>
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <label className="text-xs font-bold text-slate-600">From Email</label>
+                    <input type="email" value={emailCfg.fromEmail || ''} onChange={(e) => handleEmailField('fromEmail', e.target.value)} disabled={emailSaving}
+                      placeholder="noreply@yourdomain.com" autoComplete="off"
+                      className="w-full h-11 px-3 bg-white border border-slate-200 rounded-xl text-xs font-semibold outline-none focus:border-[#16A34A] disabled:opacity-50" />
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <label className="text-xs font-bold text-slate-600">Encryption</label>
+                    <label className="flex items-center gap-2 cursor-pointer h-11">
+                      <input type="checkbox" checked={!!emailCfg.secure} onChange={(e) => handleEmailField('secure', e.target.checked)} disabled={emailSaving}
+                        className="w-5 h-5 accent-[#16A34A]" />
+                      <span className="text-xs text-slate-500">Use SSL/TLS (port 465). Leave off for STARTTLS on 587.</span>
+                    </label>
+                  </div>
+                </div>
+                {emailCfg.smtp.problems?.length > 0 && (
+                  <p className="text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                    {emailCfg.smtp.problems.join(' · ')}
+                  </p>
+                )}
               </div>
             )}
 
