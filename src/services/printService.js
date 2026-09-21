@@ -600,13 +600,23 @@ export function openKotPrintPreview(kotData) {
     alert('Please allow pop-ups to print the KOT.');
     return;
   }
-  printWindow.document.write(html);
-  printWindow.document.close();
-  printWindow.focus();
-
-  setTimeout(() => {
-    try { printWindow.print(); } catch (e) { /* ignore */ }
-  }, 300);
+  // document.write on a just-opened window can race the initial about:blank
+  // load (the popup stays blank). Writing after load (or immediately when
+  // already ready) guarantees the KOT HTML actually renders.
+  const writeKot = () => {
+    printWindow.document.open();
+    printWindow.document.write(html);
+    printWindow.document.close();
+    printWindow.focus();
+    setTimeout(() => {
+      try { printWindow.print(); } catch (e) { /* ignore */ }
+    }, 300);
+  };
+  if (printWindow.document.readyState === 'loading') {
+    printWindow.addEventListener('load', writeKot, { once: true });
+  } else {
+    writeKot();
+  }
 }
 
 /**

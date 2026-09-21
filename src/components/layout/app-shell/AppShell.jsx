@@ -16,8 +16,8 @@ import NewOrderPage from '../../../features/pos/workspace/pages/NewOrderPage';
 import TakeOrderWizard from '../../../features/pos/workspace/components/TakeOrderWizard';
 import ErrorBoundary from '../../common/ErrorBoundary';
 import { AlertTriangle, X, CheckCircle2, ShieldAlert } from 'lucide-react';
-import { canAccessScreen, getDefaultScreenForRole, SCREEN_FEATURES, hasFeature, isScreenAllowedForBusinessMode } from '../../../utils/permissions';
-import { getBusinessCapabilities } from '../../../utils/businessCapabilities';
+import { canAccessScreen, getDefaultScreenForRole, SCREEN_FEATURES, hasFeature, isScreenAllowedForBusinessMode, getRoleDisplayName } from '../../../utils/permissions';
+import { getBusinessCapabilities, isBasicPosFoodBusiness, isBasicPosProductionMode } from '../../../utils/businessCapabilities';
 import OnboardingFlow from '../../../features/onboarding/OnboardingFlow';
 import RegisterPage from '../../../features/onboarding/RegisterPage';
 import { isSelfServeOnboarding, resolveHomeScreen } from '../../../features/onboarding/onboarding.lib';
@@ -33,6 +33,7 @@ const MenuPage = lazy(() => import('../../../features/masters/menu/pages/MenuPag
 const StaffPage = lazy(() => import('../../../features/masters/staff/pages/StaffPage'));
 const ReportsPage = lazy(() => import('../../../features/reports/pages/ReportsPage'));
 const SettingsPage = lazy(() => import('../../../features/settings/pages/SettingsPage'));
+const DiscountsPage = lazy(() => import('../../../features/discounts/pages/DiscountsPage'));
 const SubscriptionPage = lazy(() => import('../../../features/subscription/pages/SubscriptionPage'));
 const BusinessApplications = lazy(() => import('../../../features/super-admin/pages/BusinessApplications'));
 
@@ -105,6 +106,7 @@ const ScreenRenderer = {
   tables: TablesPage,
   active_orders: ActiveOrdersPage,
   menu: MenuPage,
+  discounts: DiscountsPage,
   staff: StaffPage,
   reports: ReportsPage,
   settings: SettingsPage,
@@ -146,7 +148,16 @@ const SCREEN_TO_SETTING = {
 const SCREEN_BUSINESS_CAPABILITY = {
   orders: 'kitchen',      // Kitchen Tickets
   tables: 'tables',       // Floors & Tables
+  // §12: Active Orders is the in-progress order workflow — restaurant orders
+  // and BASIC_POS production orders. Retail counter-sale businesses have no
+  // such screen; a BASIC_POS food business in Quick Billing mode is redirected
+  // by the mode check below (not by a blanket capability block).
+  // active_orders intentionally NOT listed here.
 };
+// §7: Kitchen Tickets is a RESTAURANT screen — a BASIC_POS food business
+// (businessType resolves kitchen=true but the mode is counter) never gets the
+// dedicated KOT screen; its kitchen status lives inside Active Orders.
+const BASIC_POS_SCREENS = ['orders'];
 
 // ── Super Admin screens never need module visibility checks ──
 const SUPER_ADMIN_SCREENS = [  'sa_dashboard', 'sa_restaurants', 'sa_subscriptions',
@@ -263,7 +274,8 @@ function UnauthorizedPage() {
     setScreen('login');
     logout();
   };
-  const roleDisplay = (user?.role || '').toUpperCase();
+  // Presentation label via the centralized utility — WAITER shows as "Service Staff"
+  const roleDisplay = getRoleDisplayName((user?.role || '').toUpperCase());
   
   return (
     <div className="flex-1 flex items-center justify-center p-5">
@@ -436,6 +448,27 @@ export default function AppShell() {
       // even an enabled toggle cannot expose a screen the business type
       // doesn't support (e.g. Kitchen Tickets for a supermarket).
       const requiredCapability = SCREEN_BUSINESS_CAPABILITY[currentScreen];
+      // §7: BASIC_POS food businesses never get the Kitchen Tickets screen.
+      if (BASIC_POS_SCREENS.includes(currentScreen) && isBasicPosFoodBusiness(settings?.businessType)) {
+        const bestScreen = findBestAvailableScreen(settings, userRole, subscription);
+        setScreen(bestScreen);
+        return;
+      }
+      // §12: Active Orders is hidden for a BASIC_POS food business running in
+      // Quick Billing mode (enableCounterSale ON) — no production workflow.
+      // Restaurants and BASIC_POS production tenants pass through. The same
+      // centralized predicate drives the Sidebar, this guard and the POS mode
+      // resolution — they can never disagree.
+      if (currentScreen === 'active_orders') {
+        const caps = settings?.capabilities || getBusinessCapabilities(settings?.businessType);
+        const isBasicPos = isBasicPosFoodBusiness(settings?.businessType);
+        const productionHidden = isBasicPos && !isBasicPosProductionMode(settings);
+        if (caps.kitchen === false || settings?.enableActiveOrders === false || productionHidden) {
+          const bestScreen = findBestAvailableScreen(settings, userRole, subscription);
+          setScreen(bestScreen);
+          return;
+        }
+      }
       if (requiredCapability) {
         const caps = settings?.capabilities || getBusinessCapabilities(settings?.businessType);
         if (caps[requiredCapability] === false) {

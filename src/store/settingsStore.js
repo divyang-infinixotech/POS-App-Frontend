@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { settingApi } from '../api/setting.api';
-import { getBusinessCapabilities } from '../utils/businessCapabilities';
+import { getBusinessCapabilities, isBasicPosFoodBusiness } from '../utils/businessCapabilities';
 
 // ── Keys that control module visibility in the sidebar & route guard ──────
 const MODULE_VISIBILITY_KEYS = [
@@ -27,12 +27,12 @@ const BUSINESS_MODE_PRESETS = {
   },
   counter: {
     label: 'Basic POS',
-    description: 'Quick billing: no tables, no KOT, no Active Orders. Payment directly from POS Ordering.',
+    description: 'Counter ordering: no tables or floors. Kitchen workflow (KOT → Active Orders → Ready → Bill) when Quick Billing is OFF; direct payment when ON.',
     settings: {
-      enableCounterSale: true,
-      enableKitchen: false,
+      enableCounterSale: false,
+      enableKitchen: true,
       enableFloorManagement: false,
-      enableActiveOrders: false,
+      enableActiveOrders: true,
       enableMenu: true,
       enableReports: true,
       enableBilling: true,
@@ -54,15 +54,16 @@ const BUSINESS_MODE_PRESETS = {
 };
 
 // ── Business-mode normalization ─────────────────────────────────────────────
-// The backend stores the Plan enum (`RESTAURANT` | `BASIC_POS`) while the UI
-// uses lowercase modes (`restaurant` | `counter`; `hybrid` only via
-// applyBusinessMode). Normalize ONCE here so every mode comparison in the app
-// accepts both forms — a BASIC_POS tenant must resolve to the `counter`
-// preset (Counter Sale), not fall back to the restaurant preset.
+// The backend stores the Plan enum (`RESTAURANT` | `BASIC_POS` |
+// `QUICK_BILLING`) while the UI uses lowercase modes (`restaurant` | `counter`;
+// `hybrid` only via applyBusinessMode). Normalize ONCE here so every mode
+// comparison in the app accepts all forms — a BASIC_POS **or** QUICK_BILLING
+// tenant must resolve to the `counter` preset (Counter Sale), not fall back
+// to the restaurant preset. Only RESTAURANT maps to the restaurant preset.
 export const normalizeBusinessMode = (mode) => {
   const raw = String(mode || '').trim();
   const upper = raw.toUpperCase();
-  if (upper === 'BASIC_POS') return 'counter';
+  if (upper === 'BASIC_POS' || upper === 'QUICK_BILLING') return 'counter';
   if (upper === 'RESTAURANT') return 'restaurant';
   const lower = raw.toLowerCase();
   return ['restaurant', 'counter', 'hybrid'].includes(lower) ? lower : 'restaurant';
@@ -187,8 +188,20 @@ const defaultSettings = {
   barcodeScannerEnabled: false, // Part 11: tenant scanner toggle (plan entitlement still applies first)
   // Business Mode (configures multiple module visibility toggles at once)
   businessMode: 'restaurant',   // 'restaurant' | 'counter' (Basic POS) | 'hybrid'
-  // Counter Sale Mode
-  enableCounterSale: false,     // Basic POS quick-billing flow (simplified POS flow)
+  // Raw subscription plan mode (RESTAURANT | BASIC_POS | QUICK_BILLING) —
+  // set from the settings API; distinguishes a BASIC_POS food business from
+  // a QUICK_BILLING retail one (never client-supplied).
+  subscriptionBusinessMode: null,
+  // Counter Sale Mode — "Enable Basic POS Quick Billing" (§2/§13).
+  // OFF (default) = BASIC_POS production workflow (Order → KOT → Active
+  // Orders → kitchen → Ready → Bill). ON = direct payment, no KOT/kitchen.
+  // Always OFF for QUICK_BILLING retail (that mode is quick billing by
+  // definition, with no kitchen workflow either way).
+  enableCounterSale: false,
+  // True when this tenant is a BASIC_POS food business (café/bakery/bar/
+  // food-truck/cloud-kitchen) — derived from businessType capabilities;
+  // only these tenants show the Quick Billing toggle in POS Settings.
+  isBasicPosFoodBusiness: false,
   
   // Kitchen
   enableKitchenDisplay: true,
@@ -366,6 +379,9 @@ const useSettingsStore = create((set, get) => ({
             // previous behavior (food) when the backend hasn't been upgraded.
             businessType: s.businessType || base.businessType || 'RESTAURANT',
             capabilities: s.capabilities || getBusinessCapabilities(s.businessType || 'RESTAURANT'),
+            // §2: BASIC_POS food-business flag (drives the Quick Billing toggle
+            // visibility in POS Settings and the production-mode workflows).
+            isBasicPosFoodBusiness: isBasicPosFoodBusiness(s.businessType || base.businessType),
             enableCounterSale: s.enableCounterSale !== null && s.enableCounterSale !== undefined
               ? s.enableCounterSale : base.enableCounterSale,
             // Part 11: tenant Barcode Scanner toggle (DB column, default false)
@@ -401,13 +417,19 @@ const useSettingsStore = create((set, get) => ({
             if (effectiveMode === 'restaurant') {
               newSettings.enableCounterSale = false;
             } else if (effectiveMode === 'counter') {
-              newSettings.enableCounterSale = true;
-              // Counter mode MUST NOT have restaurant-specific modules.
-              // These toggles are hidden from the Settings UI in counter mode,
-              // so they should always be OFF regardless of stale backend values.
-              newSettings.enableKitchen = false;
+              // §2: BOTH basic modes drive the 'counter' UI, but the module
+              // toggles come from the SERVER (DB authoritative) — never forced
+              // here. A BASIC_POS food business keeps enableKitchen /
+              // enableActiveOrders ON in production mode (Quick Billing OFF) and
+              // keeps its enableCounterSale toggle; a QUICK_BILLING retail
+              // business keeps them OFF (retail capabilities from businessType).
+              // Only floors/tables are mode-enforced OFF — no basic mode has a
+              // dine-in seating workflow.
               newSettings.enableFloorManagement = false;
-              newSettings.enableActiveOrders = false;
+              // Raw plan mode (RESTAURANT | BASIC_POS | QUICK_BILLING) from the
+              // settings API — distinguishes a BASIC_POS food business from a
+              // QUICK_BILLING retail one (never client-supplied).
+              newSettings.subscriptionBusinessMode = s.subscriptionBusinessMode || null;
             }
           }
 
@@ -523,6 +545,12 @@ const useSettingsStore = create((set, get) => ({
       // Persist UI-only fields to localStorage (cache for offline/fast boot — DB remains source of truth)
       saveUiSettings(s);
       
+      // §12: re-fetch from the server so the store reflects the DB-authoritative
+      // values (the backend normalizes production-module flags for the tenant's
+      // capabilities) — never the local React state alone. Without this, a
+      // stale enableCounterSale/enableActiveOrders can keep driving the UI
+      // after a save+reload cycle.
+      try { await get().fetchSettings(); } catch { /* keep local state */ }
       set({ saving: false });
       return { success: true };
     } catch (e) {

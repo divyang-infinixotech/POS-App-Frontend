@@ -5,6 +5,7 @@ import {
   Layers,
   Clock,
   FileSpreadsheet,
+  TicketPercent,
   Users,
   FileText,
   Settings as SettingsIcon,
@@ -18,7 +19,7 @@ import AppLogo from '../../common/AppLogo';
 import { cn } from '../../../lib/utils';
 import { useAuthStore, useUiStore, useSettingsStore, useCartStore } from '../../../store';
 import { canAccessScreen, SCREEN_FEATURES, hasFeature, isScreenAllowedForBusinessMode, screenPermissionKey, hasStaffPermission } from '../../../utils/permissions';
-import { getBusinessCapabilities, catalogNaming } from '../../../utils/businessCapabilities';
+import { getBusinessCapabilities, catalogNaming, isBasicPosFoodBusiness, isBasicPosProductionMode } from '../../../utils/businessCapabilities';
 
 // Static sidebar items (order-creation entry is inserted dynamically per business mode)
 const navItemsBase = [
@@ -26,6 +27,7 @@ const navItemsBase = [
   { screen: 'tables', label: 'Floors & Tables', icon: Layers, setting: 'enableFloorManagement' },
   { screen: 'active_orders', label: 'Active Orders', icon: Clock, setting: 'enableActiveOrders' },
   { screen: 'menu', label: 'Menu & Stock', icon: FileSpreadsheet, setting: 'enableMenu' },
+  { screen: 'discounts', label: 'Discounts & Promotions', icon: TicketPercent },
   { screen: 'staff', label: 'Staff Roster', icon: Users, setting: 'enableStaffRoster' },
   { screen: 'reports', label: 'Reports & Sales', icon: FileText, setting: 'enableReports' },
   { screen: 'settings', label: 'POS Settings', icon: SettingsIcon },
@@ -79,6 +81,23 @@ export default function Sidebar() {
   const capabilities = settings?.capabilities || getBusinessCapabilities(settings?.businessType);
   const catalogLabel = catalogNaming(settings?.businessType).catalogLabel;
 
+  // §12: Active Orders is visible for RESTAURANT (always) and for a BASIC_POS
+  // food business in PRODUCTION mode (Quick Billing OFF). It is hidden when
+  // Quick Billing is ON (no production workflow) and never shown for
+  // QUICK_BILLING retail (no kitchen capability). Kitchen Tickets stays
+  // restaurant-only — BASIC_POS operates through Active Orders (§7).
+  // Resolved through the ONE centralized predicate shared with the AppShell
+  // route guard and POS mode resolution — the three can never disagree.
+  const isBasicPos = isBasicPosFoodBusiness(settings?.businessType);
+  const showActiveOrders =
+    capabilities.kitchen === true &&
+    (settings?.enableActiveOrders !== false) &&
+    (!isBasicPos || isBasicPosProductionMode(settings));
+  // §7: no dedicated Kitchen Tickets screen for BASIC_POS — kitchen status is
+  // still maintained (KOT data + status APIs unchanged), it is just surfaced
+  // through Active Orders instead of its own sidebar module.
+  const showKitchenTickets = capabilities.kitchen === true && !isBasicPos;
+
   // When the subscription has expired the POS is locked server-side; hide the
   // module navigation so the sidebar matches the backend state (never only a
   // frontend hint — the API blocks these routes regardless).
@@ -112,8 +131,14 @@ export default function Sidebar() {
     // food-vertical features — never shown for retail business types, and the
     // catalog item is renamed Menu ↔ Products via the capability map.
     // (§8 audit fix: each screen checks its OWN capability, not kitchen's.)
-    if (item.screen === 'orders' && !capabilities.kitchen) return false;
+    // §7: Kitchen Tickets is a RESTAURANT screen only. BASIC_POS keeps the
+    // kitchen DATA workflow but never gets a dedicated KOT screen.
+    if (item.screen === 'orders' && !showKitchenTickets) return false;
     if (item.screen === 'tables' && !capabilities.tables) return false;
+    // §12: Active Orders = restaurant orders + BASIC_POS production orders
+    // (Quick Billing OFF). Hidden for BASIC_POS Quick Billing (no production
+    // workflow) and for QUICK_BILLING retail (no kitchen capability).
+    if (item.screen === 'active_orders' && !showActiveOrders) return false;
     // Module visibility from POS Settings
     if (item.setting && settings[item.setting] === false) return false;
     // Plan feature access (hide modules not included in the subscription plan)

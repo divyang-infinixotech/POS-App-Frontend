@@ -8,7 +8,7 @@ import {
   Monitor, Layout, Plus, Utensils, Leaf, Beef, ShoppingCart, ScanBarcode
 } from 'lucide-react';
 import { useSettingsStore, useUiStore, useAuthStore } from '../../../store';
-import { getBusinessCapabilities } from '../../../utils/businessCapabilities';
+import { getBusinessCapabilities, isBasicPosFoodBusiness } from '../../../utils/businessCapabilities';
 import { FEATURE_FOR_SETTING, hasFeature } from '../../../utils/permissions';
 
 // ─── Reusable UI Components ─────────────────────────────────────────────────
@@ -148,7 +148,7 @@ const MODULE_TOGGLES = [
   {
     key: 'enableCounterSale',
     label: 'Enable Basic POS Quick Billing',
-    description: "If ON: Basic POS quick billing mode. Hides 'Place Order', shows only 'PAYMENT'. No KOT, no table assignment, no active order creation. Orders are saved as COUNTER_SALE type with immediate billing.",
+    description: "OFF: Orders are sent to the kitchen through KOT and remain in Active Orders until ready. No tables or floors. ON: Items go directly to payment. No KOT, kitchen preparation, or Active Orders.",
     modes: ['counter', 'hybrid'],
   },
   {
@@ -242,6 +242,10 @@ export default function SettingsPage() {
   const capabilities = settings.capabilities || getBusinessCapabilities(settings.businessType);
   const isFoodBusiness = capabilities.dietary === true;
   const isKitchenBusiness = capabilities.kitchen === true;
+  // §13: "Enable Basic POS Quick Billing" is a BASIC_POS food-business toggle
+  // (café/bakery/bar/food-truck/cloud-kitchen) — never shown for QUICK_BILLING
+  // retail businesses (those are quick billing by mode, with nothing to toggle).
+  const isBasicPosFood = isBasicPosFoodBusiness(settings.businessType);
 
   // Plan module lock — a module excluded from the restaurant's subscription plan
   // cannot be enabled from Settings (backend authorization still blocks it).
@@ -258,11 +262,15 @@ export default function SettingsPage() {
       // Business-capability filter (§12): kitchen/KOT toggles never appear for
       // non-kitchen verticals regardless of plan/mode; dietary requires food.
       if (t.key === 'enableKitchen' && !isKitchenBusiness) return false;
+      // §13: Quick Billing toggle is scoped to BASIC_POS food businesses only —
+      // a QUICK_BILLING retail tenant never sees it (and the backend forces it
+      // off so it can never mis-describe retail behavior).
+      if (t.key === 'enableCounterSale' && !isBasicPosFood) return false;
       if (planLocked(t.key)) return false;
       return true;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [businessMode, subscription, isKitchenBusiness]);
+  }, [businessMode, subscription, isKitchenBusiness, isBasicPosFood]);
 
   // ── Search: match the section label OR any VISIBLE setting label in it.
   // Hidden settings (wrong business mode / not in plan) are never searched.
@@ -280,6 +288,8 @@ export default function SettingsPage() {
         labels.push('Business Mode');
         MODULE_TOGGLES.forEach((t) => {
           if (!t.modes.includes(mode)) return;
+          if (t.key === 'enableKitchen' && !isKitchenBusiness) return;
+          if (t.key === 'enableCounterSale' && !isBasicPosFood) return;
           if (planLocked(t.key)) return;
           labels.push(t.label);
         });
@@ -452,13 +462,29 @@ export default function SettingsPage() {
             <SectionCard title="Business Mode" description="Your business mode is determined by your subscription plan." icon={Layout}>
               {(() => {
                 const isRestaurant = businessMode === 'restaurant';
-                const modeLabel = isRestaurant ? 'Restaurant' : 'Basic POS';
+                // §2/§13: a BASIC_POS food business in Quick Billing mode shows
+                // the quick-billing description; production mode (default) shows
+                // the counter/KOT workflow. Retail never reaches this UI block
+                // with kitchen toggles — modeDetails stays truthful per mode.
+                const quickBillingOn = isBasicPosFood && settings.enableCounterSale === true;
+                // §10: BUSINESS MODE vs SETTING are different concepts — a
+                // QUICK_BILLING retail tenant must never read as "Basic POS".
+                const isRetailQuickBilling = !isRestaurant && !isBasicPosFood;
+                const modeLabel = isRestaurant ? 'Restaurant' : isRetailQuickBilling ? 'Quick Billing (Retail)' : 'Basic POS';
                 const modeDesc = isRestaurant
                   ? 'Full dine-in restaurant operations'
-                  : 'Quick billing and POS operations';
+                  : isRetailQuickBilling
+                    ? 'Retail quick billing — items go directly to payment'
+                    : quickBillingOn
+                      ? 'Quick billing — items go directly to payment'
+                      : 'Counter ordering with kitchen preparation';
                 const modeDetails = isRestaurant
                   ? 'Tables • KOT • Kitchen • Active Orders'
-                  : 'No tables • No KOT/Kitchen workflow';
+                  : isRetailQuickBilling
+                    ? 'Cart • Payment • No KOT/Kitchen/Tables'
+                    : quickBillingOn
+                      ? 'Cart • Payment • No KOT/Kitchen workflow'
+                      : 'Counter Order • KOT • Kitchen • Active Orders • No tables';
                 const emoji = isRestaurant ? '🍽️' : '🧾';
                 return (
                   <div>

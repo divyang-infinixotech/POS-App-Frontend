@@ -1,10 +1,10 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useUiStore, useCartStore, useSettingsStore, useAuthStore } from '../../../store';
 import { 
   Clock, Users, Search, Ban, RefreshCw, Loader2, X, AlertTriangle, 
   Plus, Printer, CreditCard, ArrowRight, UtensilsCrossed, 
   Coffee, CheckCircle2, RotateCcw, DollarSign, Trash2, ChefHat,
-  Eye, Play, SplitSquareVertical
+  Eye, Play, SplitSquareVertical, Building2, ReceiptText
 } from 'lucide-react';
 import orderApi from '../../../api/order.api';
 import { kotApi } from '../../../api/kot.api';
@@ -13,6 +13,7 @@ import { useSocketEvent } from '../../../hooks/useSocket';
 import { openBillPrintPreview, openKotPrintPreview } from '../../../services/printService';
 import API_BASE_URL from '../../../config/apiConfig';
 import { canHandleBilling } from '../../../utils/permissions';
+import { isBasicPosFoodBusiness } from '../../../utils/businessCapabilities';
 
 // ── Color status mapping ──
 const STATUS_STYLES = {
@@ -103,6 +104,10 @@ export default function ActiveOrdersPage() {
   const currency = settings?.currencySymbol || '₹';
   const { user } = useAuthStore();
   const isServiceStaff = (user?.role || '').toUpperCase() === 'WAITER';
+  // §5: a BASIC_POS food business runs counter-oriented cards — no table or
+  // floor identifiers on a COUNTER ORDER. Restaurants keep the existing
+  // prominent TABLE identifier untouched.
+  const isCounterOriented = isBasicPosFoodBusiness(settings?.businessType);
   // Bill checkout / payment actions are restricted to billing-capable roles
   // (ADMIN/MANAGER/CASHIER). WAITER and KITCHEN must never see them.
   const canBill = canHandleBilling(user?.role);
@@ -134,6 +139,21 @@ export default function ActiveOrdersPage() {
 
   // KOT button loading per order (double-click protection)
   const [kotLoading, setKotLoading] = useState(null);
+
+  // ── Preview state (Part: Active Order Preview) ──
+  // previewOrder = the order currently shown in the preview modal; fetched via
+  // the EXISTING tenant-scoped GET /orders/:id endpoint (real DB data only —
+  // no separate fake order model). previewLoading covers the fetch window.
+  const [previewOrder, setPreviewOrder] = useState(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [showPreview, setShowPreview] = useState(false);
+  const previewOrderIdRef = useRef(null);
+
+  const closePreview = () => {
+    setShowPreview(false);
+    setPreviewOrder(null);
+    previewOrderIdRef.current = null;
+  };
 
   // Split merged-order button loading per merge group
   const [splitLoading, setSplitLoading] = useState(null);
@@ -672,6 +692,47 @@ export default function ActiveOrdersPage() {
 
   const cancellingOrder = (orders || []).find(o => o.id === cancellingOrderId);
 
+  // ── Active Order Preview (Part: PREVIEW) ──
+  // Fetches the COMPLETE current order (all items across every KOT — the
+  // backend GET /orders/:id returns orderItems, not a single KOT's delta)
+  // through the existing authenticated, tenant-scoped endpoint. Only the
+  // minimal detail required by the preview is rendered; no other tenant's data
+  // can appear because the tenant client is bound to the authenticated user.
+  const handlePreview = async (order) => {
+    if (previewLoading) return; // double-tap guard
+    previewOrderIdRef.current = order.id;
+    setPreviewLoading(true);
+    setPreviewOrder(null);
+    try {
+      const resp = await orderApi.getById(order.id);
+      const full = resp?.data || resp;
+      if (!full || full.id) {
+        setPreviewOrder(full || order); // fall back to the list row if the detail call somehow returns an empty body
+      } else {
+        setPreviewOrder(order);
+      }
+      setShowPreview(true);
+    } catch (e) {
+      addToast(e?.message || 'Failed to load order preview', 'error');
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
+  // True while the preview fetch for THIS card's order is in flight (per-card
+  // spinner without spinning every card).
+  const previewRequestId = previewLoading ? previewOrderIdRef.current : null;
+
+  // Preview totals — from the authoritative order row (same values the
+  // backend stores), never recomputed client-side.
+  const previewTotals = useMemo(() => ({
+    subtotal: Number(previewOrder?.subtotal || 0),
+    discount: Number(previewOrder?.discount || 0),
+    serviceCharge: Number(previewOrder?.serviceCharge || 0),
+    tax: Number(previewOrder?.taxAmount || 0),
+    grandTotal: Number(previewOrder?.totalAmount ?? previewOrder?.grandTotal ?? previewOrder?.subtotal ?? 0),
+  }), [previewOrder]);
+
   const tabs = [
     { key: 'Active', label: 'Active', icon: Play, count: activeOrders.length },
     { key: 'Hold', label: 'Hold', icon: Coffee, count: filteredHeld.length, setting: 'enableHoldOrders' },
@@ -686,7 +747,14 @@ export default function ActiveOrdersPage() {
     const sStyle = getStatusStyle(order.status);
     const waiterName = order.user?.name || '—';
     const customerName = order.customer?.name || '—';
-    const tableName = order.table ? `Table ${order.table.tableNo || order.table.name}` : 'Takeaway';
+    // §14: only a REAL table relationship becomes a table label. Takeaway /
+    // counter orders have no table — never invent "TABLE —" or a number.
+    // A BASIC_POS food business renders counter-oriented cards instead:
+    // "COUNTER ORDER", no table/floor identifiers, no Transfer/Hold.
+    const isCounterOrder = isCounterOriented;
+    const tableName = order.table
+      ? `Table ${order.table.tableNo || order.table.name}`
+      : (isCounterOrder ? 'Counter Order' : 'Takeaway');
 
     return (
       <div key={order.id}
@@ -713,15 +781,41 @@ export default function ActiveOrdersPage() {
           <span className="text-[8px] font-bold text-slate-400 uppercase ml-auto">{order.orderType?.replace('_', ' ')}</span>
         </div>
 
-        {/* Details grid */}
-        <div className="grid grid-cols-2 gap-x-2 gap-y-1 text-[10px] mb-2.5">
-          <div className="flex items-center gap-1 text-slate-500">
-            <UtensilsCrossed className="w-3 h-3 text-slate-400" />
-            <span className="font-semibold truncate">{tableName}</span>
+        {/* §12/§13: PROMINENT table identifier — only when the order actually
+            has a table (real Order → RestaurantTable relation from the API).
+            Readable from a POS/tablet at a glance; takeaway shows nothing here
+            rather than a fake "TABLE —". Counter orders (BASIC_POS) show a
+            prominent COUNTER ORDER label instead — never a table number. */}
+        {order.table && (
+          <div className="flex items-center gap-1.5 mb-2">
+            <UtensilsCrossed className="w-3.5 h-3.5 text-[#16A34A] shrink-0" />
+            <span className="text-base font-black text-slate-800 uppercase tracking-wide truncate">
+              Table {order.table.tableNo || order.table.name}
+            </span>
             {order.isMerged && order.mergedTables && order.mergedTables.length > 1 && (
-              <span className="text-[8px] text-amber-600 font-bold ml-1">(Merged: {order.mergedTables.map(t => t.tableNo).join(" + ")})</span>
+              <span className="text-[9px] text-amber-600 font-bold ml-auto shrink-0">
+                Merged: {order.mergedTables.map(t => t.tableNo).join(" + ")}
+              </span>
             )}
           </div>
+        )}
+        {isCounterOrder && (
+          <div className="flex items-center gap-1.5 mb-2">
+            <ReceiptText className="w-3.5 h-3.5 text-[#16A34A] shrink-0" />
+            <span className="text-base font-black text-slate-800 uppercase tracking-wide truncate">
+              Counter Order
+            </span>
+          </div>
+        )}
+
+        {/* Details grid */}
+        <div className="grid grid-cols-2 gap-x-2 gap-y-1 text-[10px] mb-2.5">
+          {!isCounterOrder && (
+            <div className="flex items-center gap-1 text-slate-500">
+              <UtensilsCrossed className="w-3 h-3 text-slate-400" />
+              <span className="font-semibold truncate">{tableName}</span>
+            </div>
+          )}
           <div className="flex items-center gap-1 text-slate-500">
             <span className="font-semibold">👤</span>
             <span className="font-semibold truncate">{customerName}</span>
@@ -742,9 +836,13 @@ export default function ActiveOrdersPage() {
           <span className="font-mono text-sm font-black text-[#16A34A]">{currency}{Number(total).toLocaleString('en-IN')}</span>
         </div>
 
-        {/* Simplified Action Buttons: Add Item, Print KOT (if enabled), Bill (if enabled), Transfer (if enabled), Cancel */}
+        {/* Simplified Action Buttons: Preview, Add Item, Print KOT (if enabled), Bill (if enabled), Transfer (if enabled), Cancel */}
         {/* h-10 min touch targets (≈40px) — no hover-only actions */}
         <div className={`grid ${isServiceStaff ? 'grid-cols-2' : 'grid-cols-3'} gap-1.5`}>
+          <button onClick={() => handlePreview(order)}
+            className="h-10 bg-white border border-indigo-200 hover:bg-indigo-50 text-indigo-700 font-bold rounded-lg text-[9px] uppercase tracking-wider flex items-center justify-center gap-1 transition-colors cursor-pointer">
+            {previewLoading && previewRequestId === order.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Eye className="w-3 h-3" />} Preview
+          </button>
           <button onClick={() => handleAddItem(order)}
             className="h-10 bg-[#16A34A] hover:bg-[#15803D] text-white font-bold rounded-lg text-[9px] uppercase tracking-wider flex items-center justify-center gap-1 transition-all shadow-xs cursor-pointer">
             <Plus className="w-3 h-3" /> Add Item
@@ -763,13 +861,15 @@ export default function ActiveOrdersPage() {
           )}
         </div>
         <div className="grid grid-cols-2 gap-1.5 mt-1.5">
-          {settings.enableTransferTable !== false && (order.tableId || order.table?.id) && (
+          {/* §14: Transfer/Hold depend on table/seating behavior — never shown
+              for BASIC_POS counter orders. Restaurants keep both. */}
+          {!isCounterOrder && settings.enableTransferTable !== false && (order.tableId || order.table?.id) && (
             <button onClick={() => handleOpenTransfer(order)}
               className="h-10 bg-white border border-slate-200 hover:bg-slate-50 text-[#111827] font-bold rounded-lg text-[9px] uppercase tracking-wider flex items-center justify-center gap-1 transition-colors cursor-pointer">
               <ArrowRight className="w-3 h-3" /> Transfer
             </button>
           )}
-          {settings.enableHoldOrders !== false && (
+          {!isCounterOrder && settings.enableHoldOrders !== false && (
             <button onClick={() => handleHoldOrder(order)} disabled={holdLoading === order.id}
               className={`h-10 bg-white border border-amber-200 hover:bg-amber-50 text-amber-700 font-bold rounded-lg text-[9px] uppercase tracking-wider flex items-center justify-center gap-1 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed`}>
               {holdLoading === order.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Coffee className="w-3 h-3" />}
@@ -1218,6 +1318,111 @@ Items: ${itemsCount}`, 'info');
               <button onClick={() => { setShowTransferModal(false); setTransferringOrder(null); }}
                 className="h-8.5 px-4 bg-white border border-slate-200 rounded-xl text-[10px] font-bold text-slate-600 hover:bg-slate-50 transition-all cursor-pointer">
                 Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Order Preview Modal — full current order incl. all KOT items, real DB values */}
+      {showPreview && previewOrder && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs animate-fade-in"
+          onClick={closePreview}>
+          <div className="bg-white w-full max-w-md rounded-2xl shadow-xl border border-slate-100 max-h-[85vh] flex flex-col"
+            onClick={(e) => e.stopPropagation()}>
+            {/* Header: order no + table/floor/type/status */}
+            <div className="flex items-center justify-between gap-3 p-4 border-b border-slate-100">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-10 h-10 rounded-xl bg-emerald-50 flex items-center justify-center shrink-0">
+                  <Eye className="w-5 h-5 text-emerald-600" />
+                </div>
+                <div className="min-w-0">
+                  <h4 className="text-sm font-extrabold text-slate-800">Order #{previewOrder.orderNo || previewOrder.id}</h4>
+                  <p className="text-[11px] text-slate-500 mt-0.5 truncate">
+                    {previewOrder.table ? `Table ${previewOrder.table.tableNo}` : 'Takeaway'}
+                    {previewOrder.table?.floor?.name && <span> · {previewOrder.table.floor.name}</span>}
+                    {previewOrder.orderType ? ` · ${previewOrder.orderType}` : ''}
+                    {previewOrder.status ? ` · ${previewOrder.status}` : ''}
+                  </p>
+                </div>
+              </div>
+              <button onClick={closePreview}
+                className="w-8 h-8 rounded-xl border border-slate-200 flex items-center justify-center text-slate-400 hover:bg-slate-50 transition-all cursor-pointer shrink-0"
+                aria-label="Close preview">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Customer (only when present) */}
+            {previewOrder.customerName && (
+              <div className="px-4 pt-3">
+                <p className="text-[10px] font-black uppercase tracking-wider text-slate-400">Customer</p>
+                <p className="text-xs font-bold text-slate-700">{previewOrder.customerName}</p>
+              </div>
+            )}
+
+            {/* Items — complete current order across all KOTs (orderItems = every
+                OrderItem row on the order, incl. incrementally added ones) */}
+            <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
+              {!previewOrder.orderItems || previewOrder.orderItems.length === 0 ? (
+                <div className="text-center py-8 text-slate-400 text-xs italic">
+                  No items have been added to this order.
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {previewOrder.orderItems.map((item, idx) => (
+                    <div key={item.id || idx} className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-xs font-bold text-slate-700 truncate">{item.menuItem?.name || 'Item'}</p>
+                        {item.notes && <p className="text-[10px] text-slate-400">{item.notes}</p>}
+                      </div>
+                      <div className="text-right shrink-0">
+                        <p className="text-xs font-bold text-slate-700">
+                          {item.quantity} × ₹{Number(item.price).toFixed(2)}
+                        </p>
+                        <p className="text-[10px] text-slate-500">₹{Number(item.total).toFixed(2)}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Totals — real stored values from the order row */}
+            <div className="px-4 py-3 border-t border-slate-100 space-y-1.5">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-semibold text-slate-500">Subtotal</span>
+                <span className="text-[11px] font-bold text-slate-700">₹{previewTotals.subtotal.toFixed(2)}</span>
+              </div>
+              {previewTotals.discount > 0 && (
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-semibold text-slate-500">Discount</span>
+                  <span className="text-[11px] font-bold text-emerald-600">−₹{previewTotals.discount.toFixed(2)}</span>
+                </div>
+              )}
+              {previewTotals.serviceCharge > 0 && (
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-semibold text-slate-500">Service Charge</span>
+                  <span className="text-[11px] font-bold text-slate-700">₹{previewTotals.serviceCharge.toFixed(2)}</span>
+                </div>
+              )}
+              {previewTotals.tax > 0 && (
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-semibold text-slate-500">Tax</span>
+                  <span className="text-[11px] font-bold text-slate-700">₹{previewTotals.tax.toFixed(2)}</span>
+                </div>
+              )}
+              <div className="flex items-center justify-between pt-1 border-t border-slate-100">
+                <span className="text-xs font-extrabold text-slate-800">Grand Total</span>
+                <span className="text-sm font-extrabold text-slate-800">₹{previewTotals.grandTotal.toFixed(2)}</span>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="p-4 border-t border-slate-100 flex justify-end">
+              <button onClick={closePreview}
+                className="h-8.5 px-4 bg-white border border-slate-200 rounded-xl text-[10px] font-bold text-slate-600 hover:bg-slate-50 transition-all cursor-pointer">
+                Close
               </button>
             </div>
           </div>

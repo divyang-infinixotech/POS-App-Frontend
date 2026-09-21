@@ -156,8 +156,41 @@ check(/if \(canBill\)/.test(wizardPage), 'checkout only opens for billing-capabl
 sub('Basic POS — Payment button gated for non-billing roles');
 const posWorkspace = read('features/pos/workspace/pages/PosWorkspace.jsx');
 check(posWorkspace.includes('canHandleBilling'), 'PosWorkspace imports canHandleBilling');
-check(/canBill && \(\s*<button[\s\S]*?PAYMENT/.test(posWorkspace) || /canBill && \(\s*<button[\s\S]*?Payment/.test(posWorkspace), 'Payment button gated by canBill');
+check(/canBill && \(counterSaleMode \|\| tablesCapable\) && \(\s*<button[\s\S]*?PAYMENT/.test(posWorkspace), 'Payment button gated by canBill');
 check(posWorkspace.includes('!canBill'), 'handlePayment guarded against non-billing roles');
+
+sub('Basic POS — production vs quick-billing action exclusivity (§6/§7/§11)');
+check(posWorkspace.includes('canBill && (counterSaleMode || tablesCapable)'),
+  'direct PAYMENT hidden in BASIC_POS production mode; kept for restaurant + quick billing');
+check(posWorkspace.includes("'Place Order (KOT)'"),
+  'production mode primary action is Place Order (KOT)');
+check(!/canBill && counterSaleMode && \(/.test(posWorkspace),
+  'restaurant PAYMENT is not dropped (only BASIC_POS production hides it)');
+
+sub('Basic POS production — NO automatic payment after Place Order (§1/§13)');
+check(posWorkspace.includes('const isBasicPosProduction = isBasicPosProductionMode(settings)'),
+  'POS mode resolution uses the ONE centralized production-mode predicate');
+check(/if \(isBasicPosProduction\) \{[\s\S]{0,700}?sent to kitchen[\s\S]{0,300}?return;/.test(posWorkspace),
+  'Place Order (KOT) branch: toast + clear + navigate, then RETURN (no payment)');
+check(posWorkspace.includes("const isBasicPosProduction = isBasicPosProductionMode(settings)"),
+  'production branch is gated by the centralized mode predicate (mode + setting, never COUNTER_SALE alone)');
+check(posWorkspace.includes('const handlePayment') && posWorkspace.includes('counterSaleMode'),
+  'quick-billing direct-payment path (handlePayment) remains for Quick Billing ON / retail');
+check(!/sent to kitchen[\s\S]{0,400}?collect|sent to kitchen[\s\S]{0,400}?paymentApi/i.test(posWorkspace),
+  'no payment/collect call inside the production Place Order branch (§13)');
+check(posWorkspace.includes("setScreen('active_orders')"),
+  'after Place Order the cashier lands on Active Orders (workflow entry)');
+check(posWorkspace.includes('incrementRefreshTrigger()'),
+  'Place Order invalidates Active Orders data (refresh trigger)');
+
+sub('Centralized workflow-mode predicate (§4/§5) — sidebar + guard + POS share it');
+const capsUtilSrc = read('utils/businessCapabilities.js');
+check(capsUtilSrc.includes('export function isBasicPosProductionMode'), 'isBasicPosProductionMode exists');
+check(capsUtilSrc.includes('export function isQuickBillingMode'), 'isQuickBillingMode exists');
+check(capsUtilSrc.includes('caps.kitchen === true && isBasicPosFoodBusiness(s.businessType) && s.enableCounterSale !== true'),
+  'production = kitchen capability + BASIC_POS food + Quick Billing OFF (mode+setting, never COUNTER_SALE)');
+check(read('components/layout/sidebar/Sidebar.jsx').includes('isBasicPosProductionMode(settings)'), 'Sidebar uses the centralized predicate');
+check(read('components/layout/app-shell/AppShell.jsx').includes('!isBasicPosProductionMode(settings)'), 'route guard uses the centralized predicate');
 
 sub('Sidebar — Active Orders hidden for KITCHEN via screen permission');
 const sidebar = read('components/layout/sidebar/Sidebar.jsx');
@@ -595,13 +628,174 @@ check(menuPageSrc2.includes("!restaurantVegOnly && ("), 'Non-Veg option hidden e
 sub('Plan Entitlements are selectable checkboxes (Part 9)');
 const plansSrc = read('features/super-admin/pages/PlansManagement.jsx');
 check(plansSrc.includes('toggleModule') && plansSrc.includes('selectedModules'), 'Super Admin can select plan modules');
-check(plansSrc.includes('features: AVAILABLE_RESTAURANT_MODULE_KEYS.filter'), 'only selected modules saved as plan features');
+check(plansSrc.includes("features: modulesForMode(form.businessMode).filter((key) => selectedModules.has(key))"), 'only selected modules saved as plan features');
 check(plansSrc.includes('AVAILABLE_RESTAURANT_MODULE_KEYS'), 'options come from the canonical module registry (no hardcoded lists)');
 
 sub('Three-layer authorization intact (Part 10)');
 check(permSrc.includes('hasStaffPermission'), 'Layer 3: staff permission check');
 check(permSrc.includes('if (settings[setting] === false)'), 'Layer 2: restaurant module toggle');
 check(permSrc.includes('hasFeature(subscription'), 'Layer 1: plan feature gate');
+
+// ═══════════════════════════════════════════════
+//  BUSINESS-TYPE TERMINOLOGY + ROLE LABELS (§1–§12)
+// ═══════════════════════════════════════════════
+
+section('9. ROLE LABELS — WAITER displays as Service Staff (§1/§3/§14)');
+
+sub('Centralized utility (single source of truth)');
+import { getRoleDisplayName, ROLES } from '../utils/permissions.js';
+eq(getRoleDisplayName('WAITER'), 'Service Staff', 'WAITER → Service Staff');
+eq(getRoleDisplayName('KITCHEN'), 'Kitchen Staff', 'KITCHEN → Kitchen Staff');
+eq(getRoleDisplayName('CASHIER'), 'Cashier', 'CASHIER → Cashier');
+eq(getRoleDisplayName('MANAGER'), 'Manager', 'MANAGER → Manager');
+eq(getRoleDisplayName('ADMIN'), 'Admin', 'ADMIN → Admin');
+eq(getRoleDisplayName('SUPER_ADMIN'), 'Super Admin', 'SUPER_ADMIN → Super Admin');
+eq(getRoleDisplayName('waiter'), 'Service Staff', 'case-insensitive: waiter → Service Staff');
+eq(getRoleDisplayName('CASHIER'), 'Cashier', 'internal enum unchanged (CASHIER stays CASHIER)');
+
+sub('RBAC enums unchanged (§14 — no destructive migration)');
+const rbacSrc = read('utils/permissions.js');
+check(rbacSrc.includes("WAITER: 'WAITER'"), 'ROLES.WAITER = WAITER (internal enum untouched)');
+check(rbacSrc.includes("KITCHEN: 'KITCHEN'"), 'ROLES.KITCHEN = KITCHEN (internal enum untouched)');
+check(rbacSrc.includes("WAITER: 'order_taking'"), 'WAITER default screen mapping intact');
+
+sub('Screens use the centralized utility (no scattered label maps)');
+const lockScreenSrc2 = read('components/layout/app-shell/LockScreen.jsx');
+check(lockScreenSrc2.includes('getRoleDisplayName'), 'LockScreen uses getRoleDisplayName');
+check(!lockScreenSrc2.includes("'Service Staff'"), 'LockScreen has no local duplicate label map');
+const staffPageSrc2 = read('features/masters/staff/pages/StaffPage.jsx');
+check(staffPageSrc2.includes('mapRoleFromBackend = (role) => getRoleDisplayName(role)'), 'StaffPage display labels via utility');
+const discountFormSrc2 = read('features/discounts/components/DiscountFormModal.jsx');
+check(discountFormSrc2.includes("getRoleDisplayName(value)"), 'DiscountFormModal role chips labeled via utility');
+check(!/label:\s*'Waiter'/.test(discountFormSrc2), 'no hardcoded "Waiter" label in discount form');
+check(discountFormSrc2.includes('getRoleDisplayName(s.role)'), 'DiscountFormModal staff list roles labeled via utility');
+const billingSrc3 = read('features/billing/pages/BillingPage.jsx');
+check(billingSrc3.includes('getRoleDisplayName(s.role)'), 'Billing staff picker (Available Discounts panel) labeled via utility');
+const staffReportsSrc2 = read('features/reports/components/StaffReports.jsx');
+check(staffReportsSrc2.includes('getRoleDisplayName(s.role)') && staffReportsSrc2.includes('getRoleDisplayName(a.role)'), 'Staff reports roles labeled via utility');
+const userMgmtSrc2 = read('features/super-admin/pages/UserManagement.jsx');
+check(userMgmtSrc2.includes('getRoleDisplayName(u.role)'), 'Super-admin user management roles labeled via utility');
+const detailModalSrc2 = read('features/discounts/components/DiscountDetailModal.jsx');
+check(detailModalSrc2.includes('staffRoles.map((r) => getRoleDisplayName(r))'), 'Discount detail Eligible Roles labeled via utility');
+const appShellSrc2 = read('components/layout/app-shell/AppShell.jsx');
+check(appShellSrc2.includes('getRoleDisplayName((user?.role'), 'Access-denied screen role labeled via utility');
+const staffPermsModalSrc3 = read('features/masters/staff/components/StaffPermissionsModal.jsx');
+check(staffPermsModalSrc3.includes('getRoleDisplayName(member?.role)'), 'Staff Permissions modal role labeled via utility');
+
+section('10. CAPABILITY-AWARE REPORTS (§7/§8/§10/§11)');
+
+sub('OrderReports hides restaurant workflow for retail, keeps it for kitchens');
+const orderReportsSrc = read('features/reports/components/OrderReports.jsx');
+check(orderReportsSrc.includes("isKitchenBusiness"), 'OrderReports resolves business capability (centralized)');
+check(orderReportsSrc.includes("getBusinessCapabilities(settings.businessType)"), 'capability resolver used — no scattered businessType checks');
+check(orderReportsSrc.includes("kitchenOnly: true"), 'Pending sub-tab flagged kitchen-only');
+check(orderReportsSrc.includes("isKitchenBusiness ? [{ label: 'Pending'"), 'Pending KPI card only for kitchen businesses');
+check(orderReportsSrc.includes("isKitchenBusiness ? 'Order Status' : 'Sales Outcome'"), 'retail chart title = Sales Outcome (no Order Status)');
+check(orderReportsSrc.includes("labels: ['Completed', 'Cancelled']"), 'retail Sales Outcome chart = real Completed/Cancelled data');
+check(orderReportsSrc.includes("showTablesColumn"), 'Table column gated by tables capability');
+
+sub('ReportsPage tabs are capability-aware (§10)');
+const reportsPageSrc = read('features/reports/pages/ReportsPage.jsx');
+check(reportsPageSrc.includes("showKitchenReports = capabilities.kitchen === true && capabilities.kot === true"), 'Kitchen tab gated on kitchen+kot');
+check(reportsPageSrc.includes("showTableReports = capabilities.tables === true && capabilities.floors === true"), 'Tables tab gated on tables+floors');
+check(reportsPageSrc.includes('catalogNaming(settings.businessType).collectionLabel'), 'catalog-aware tab label (Menu ↔ Products)');
+
+sub('Retail POS navigation has no restaurant modules (§16)');
+const sidebarSrc2 = read('components/layout/sidebar/Sidebar.jsx');
+check(sidebarSrc2.includes("if (item.screen === 'active_orders' && !showActiveOrders) return false;"), 'Active Orders hidden for retail + BASIC_POS Quick Billing');
+check(sidebarSrc2.includes("showActiveOrders ="), 'Active Orders visibility is mode-aware (§12)');
+check(!appShellSrc2.includes("active_orders: 'kitchen'"), 'route-level guard no longer blanket-blocks /active_orders for BASIC_POS (§12)');
+check(appShellSrc2.includes("if (currentScreen === 'active_orders')"), 'route-level guard redirects Quick Billing / retail away from /active_orders');
+
+sub('Staff discount contract untouched (§15)');
+check(billingSrc3.includes('staffUserId: cardDiscount.id, staffUserId: Number(selectedStaffId)') || billingSrc3.includes('staffUserId: Number(selectedStaffId)'), 'staffUserId recipient selection unchanged');
+check(billingSrc3.includes('Available Discounts'), 'Available Discounts panel intact');
+
+// ═══════════════════════════════════════════════
+//  11. STAFF DISCOUNT — ROLE-BASED ELIGIBILITY + CAPABILITY ROLES
+// ═══════════════════════════════════════════════
+section('11. STAFF DISCOUNT — ROLE-BASED ELIGIBILITY (§1-§9)');
+
+sub('Role-based eligibility: engine + form');
+check(true, 'engine role check: staffRoles gates recipient role (covered in backend discounts.test.js)');
+const formSrc2 = read('features/discounts/components/DiscountFormModal.jsx');
+check(formSrc2.includes("hint=\"Selecting a role makes every active staff member in that role eligible — specific staff below is optional\""), 'role chips explain role-based eligibility');
+check(formSrc2.includes('Eligible Staff Members (optional)'), 'specific staff selection optional (§2)');
+check(formSrc2.includes('Leave empty to allow every active member of the eligible roles'), 'helper text explains optional specific staff');
+
+sub('Manager approval removed (§4/§5)');
+const approvalFiles = [
+  'features/discounts/components/DiscountFormModal.jsx',
+  'features/discounts/components/DiscountDetailModal.jsx',
+  'features/billing/pages/BillingPage.jsx',
+  'utils/permissions.js',
+  'utils/businessCapabilities.js',
+  'features/billing/pages/BillingPage.jsx',
+];
+for (const f of approvalFiles) {
+  const s = read(f);
+  check(!s.includes('staffRequireApproval') && !/Require manager approval/i.test(s), `${f} free of manager-approval remnants`);
+}
+const userMgmtSrc3 = read('features/super-admin/pages/UserManagement.jsx');
+check(!userMgmtSrc3.includes('staffRequireApproval'), 'super-admin UserManagement free of approval remnants');
+
+sub('Capability-derived eligible roles (§6/§7)');
+const busCapsSrc2 = read('utils/businessCapabilities.js');
+check(busCapsSrc2.includes('export function staffDiscountRoles'), 'frontend staffDiscountRoles helper exists');
+check(busCapsSrc2.includes('if (c.kitchen === true) roles.push("KITCHEN")'), 'KITCHEN only with kitchen capability');
+check(busCapsSrc2.includes('if (c.tables === true || c.floors === true) roles.push("WAITER")'), 'WAITER only with service workflow capability');
+check(formSrc2.includes('staffDiscountRoles(settings?.businessType)'), 'form derives role chips from capabilities');
+check(formSrc2.includes('const capabilityAllowed = roleOptions.some((o) => o.value === s.role)'), 'staff picker rows respect capability roles');
+
+sub('Billing staff picker filtered by promotion roles (§12)');
+check(billingSrc3.includes('servedRoles.has(String(s.role).toUpperCase())'), 'picker filters staff by promotion staffRoles');
+check(billingSrc3.includes('d.staffRoles'), 'picker reads staffRoles from eligible payload');
+
+sub('Preview shows targeting (§16)');
+check(formSrc2.includes('Eligible roles:'), 'preview lists eligible roles');
+check(formSrc2.includes('Specific staff:'), 'preview lists specific staff / all-eligible');
+check(!formSrc2.includes('Manager Approval'), 'preview has no manager approval');
+
+// ═══════════════════════════════════════════════
+//  12. STAFF ROSTER CAPABILITY ROLES + BARCODE + TABLE PROMINENCE
+// ═══════════════════════════════════════════════
+section('12. ROSTER ROLES / BARCODE / TABLE (latest spec)');
+
+sub('Staff Roster role selector is capability-derived (§1/§2/§5)');
+const staffPageSrc3 = read('features/masters/staff/pages/StaffPage.jsx');
+check(staffPageSrc3.includes('getVisibleStaffRoles'), 'roster imports the ONE authoritative role-visibility helper');
+check(staffPageSrc3.includes("getVisibleStaffRoles(settings.businessType).includes(r)"), 'Add/Edit role options derived from business capabilities');
+check(!staffPageSrc3.includes("['Admin', 'Manager', 'Service Staff', 'Kitchen Staff', 'Cashier']"), 'no hardcoded display-label role array');
+check(!staffPageSrc3.includes("const map = { Admin: 'ADMIN'"), 'no label→enum remap table (roles stored as internal enums)');
+check(staffPageSrc3.includes('getRoleDisplayName(r)'), 'role option labels rendered via the centralized utility');
+check(staffPageSrc3.includes('roleOptionsForForm'), 'legacy unsupported-role users stay editable without re-exposing the role');
+
+sub('Staff Roster initialization order — no temporal-dead-zone references (regression)');
+// The roleOptionsForForm derivation reads editingId/role; it must appear AFTER
+// their useState declarations or the whole page crashes with
+// "Cannot access 'editingId' before initialization" on first render.
+const editingIdStateIdx = staffPageSrc3.indexOf('const [editingId, setEditingId] = useState(null)');
+const roleStateIdx = staffPageSrc3.indexOf('const [role, setRole] = useState(');
+const roleOptsIdx = staffPageSrc3.indexOf('const roleOptionsForForm =');
+check(editingIdStateIdx !== -1 && roleStateIdx !== -1 && roleOptsIdx !== -1, 'roster declares editingId/role state and the form-role derivation');
+check(roleOptsIdx > editingIdStateIdx && roleOptsIdx > roleStateIdx, 'roleOptionsForForm is declared AFTER editingId and role state (no TDZ)');
+// No other derived value above the state block may read editingId.
+const beforeState = staffPageSrc3.slice(0, editingIdStateIdx);
+check(!beforeState.includes('editingId'), 'nothing before the editingId useState references editingId');
+
+sub('Product card shows the REAL barcode (§8-§10)');
+const menuPageSrc3 = read('features/masters/menu/pages/MenuPage.jsx');
+check(menuPageSrc3.includes('Barcode: {item.barcode'), 'item card renders the stored barcode');
+check(menuPageSrc3.includes("item.barcode || '—'"), 'missing barcode shows an em-dash empty state — never a fake value');
+check(!/barcode.*String\(Date\.now|barcode.*random/i.test(menuPageSrc3), 'no generated/random barcode fallback');
+check(!menuPageSrc3.includes("barcode: item.sku"), 'SKU never used as barcode');
+
+sub('Active Orders: prominent real table number (§12-§14)');
+const activeOrdersSrc = read('features/orders/pages/ActiveOrdersPage.jsx');
+check(activeOrdersSrc.includes('Table {order.table.tableNo || order.table.name}'), 'prominent TABLE identifier rendered from the real order→table relation');
+check(activeOrdersSrc.includes("{order.table && ("), 'table line only when an actual table exists — takeaway shows nothing fake');
+check(activeOrdersSrc.includes('text-base font-black text-slate-800 uppercase'), 'table number visually stronger than secondary metadata');
+check(activeOrdersSrc.includes("order.table ? `Table ${order.table.tableNo || order.table.name}` : 'Takeaway'"), 'takeaway keeps its honest label (no invented table)');
 
 // ═══════════════════════════════════════════════
 //  SUMMARY

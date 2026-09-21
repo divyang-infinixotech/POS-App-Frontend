@@ -5,10 +5,11 @@ import {
   ScanBarcode, AlertTriangle, ScanLine,
 } from 'lucide-react';
 import { useCartStore, useUiStore, useSettingsStore, useAuthStore } from '../../../../store';
-import { getBusinessCapabilities } from '../../../../utils/businessCapabilities';
+import { getBusinessCapabilities, isBasicPosProductionMode } from '../../../../utils/businessCapabilities';
 import { menuApi } from '../../../../api/menu.api';
 import { categoryApi } from '../../../../api/category.api';
 import { orderApi } from '../../../../api/order.api';
+import { openKotPrintPreview } from '../../../../services/printService';
 import { useSocketEvent } from '../../../../hooks/useSocket';
 import { PLACEHOLDER_IMAGE } from '../../../../lib/imagePlaceholder';
 import { canHandleBilling } from '../../../../utils/permissions';
@@ -29,7 +30,7 @@ export default function PosWorkspace() {
   // show no veg/non-veg marks. One capability check, not scattered flags.
   const isDietaryBusiness = (settings.capabilities || getBusinessCapabilities(settings.businessType)).dietary === true;
   const currency = settings?.currencySymbol || '₹';
-  const { activeOrderTakingId, setScreen, setCheckoutOrderId, addToast, goBack, refreshTrigger } = useUiStore();
+  const { activeOrderTakingId, setScreen, setCheckoutOrderId, addToast, goBack, refreshTrigger, incrementRefreshTrigger } = useUiStore();
   const { user } = useAuthStore();
   // The Payment action opens the billing overlay — restricted to billing-capable
   // roles (ADMIN/MANAGER/CASHIER). WAITER may take orders but never collect payment.
@@ -66,10 +67,22 @@ export default function PosWorkspace() {
   // Submit-in-progress state for Place Order / Payment (prevents double taps)
   const [submitting, setSubmitting] = useState(null); // null | 'place' | 'pay'
 
-  // Counter sale mode flag
-  // §7: retail tenants are ALWAYS counter-sale (no floor/table workflow) —
-  // the toggle cannot re-introduce Dine In for a business without tables.
-  const counterSaleMode = settings?.enableCounterSale === true || !tablesCapable;
+  // §2/§9: BASIC_POS quick-billing vs production mode.
+  // - A QUICK_BILLING retail tenant is ALWAYS quick billing (no kitchen
+  //   capability — the toggle never re-introduces restaurant behavior).
+  // - A BASIC_POS food business follows "Enable Basic POS Quick Billing":
+  //   ON → direct payment; OFF (default) → production (Order → KOT → Active
+  //   Orders → kitchen → Ready → Bill) with a visible "Place Order" step.
+  // Both resolve through the ONE centralized workflow-mode predicate
+  // (isBasicPosProductionMode) shared with the Sidebar and route guard —
+  // the three can never disagree.
+  const isBasicPos = (settings?.capabilities || {}).kitchen === true && !tablesCapable;
+  const isBasicPosProduction = isBasicPosProductionMode(settings);
+  const counterSaleMode = tablesCapable
+    ? false
+    : isBasicPos
+      ? settings?.enableCounterSale === true
+      : true; // retail QUICK_BILLING — always quick billing
 
   // ── Barcode scanner (Part 11 + Counter Scan mode) — same entitlement rule
   // as the full POS wizard: plan includes barcode_scanner AND the restaurant
@@ -251,6 +264,43 @@ export default function PosWorkspace() {
   const tax = settings.taxType === 'Exclusive' ? (subtotal - discount) * ((settings.gstPercentage || 0) / 100) : 0;
   const total = settings.taxType === 'Inclusive' ? subtotal - discount : subtotal + tax - discount;
 
+  // ── §4: KOT print for BASIC_POS production orders (reuses the existing
+  // shared KOT print preview — no table/floor info on a counter order).
+  // The backend auto-creates the KOT inside the order transaction and returns
+  // it in the create-order response (order.kot[0]) — printing uses that
+  // directly, so no second KOT-create request is made (a second call would
+  // hit NO_PENDING_ITEMS and return created:false, silently skipping print).
+  const printCounterKot = async (order, itemsPayload) => {
+    try {
+      const autoKot = (order.kot || [])[0] || null;
+      if (!autoKot?.kotNo) return; // defensive: no auto-KOT on the response
+      openKotPrintPreview({
+        restaurantName: settings?.branding?.restaurantName || '',
+        kotNo: autoKot.kotNo,
+        orderNo: order.orderNo || String(order.id),
+        tableNo: '', // counter order — never a table number
+        orderType: order.orderType || 'COUNTER_SALE',
+        waiterName: user?.name || '',
+        customerName: customerName || '',
+        customerPhone: customerPhone || '',
+        guestCount: 1,
+        notes: '',
+        items: (order.orderItems || []).map((oi) => ({
+          name: oi.menuItem?.name || `Item #${oi.menuItemId}`,
+          quantity: oi.quantity,
+          notes: oi.notes || '',
+          dietaryType: oi.dietaryType || oi.menuItem?.dietaryType || null,
+        })),
+        footer: settings?.receiptFooterMessage || 'Thank You!',
+        date: new Date(),
+      });
+    } catch (e) {
+      // The auto-KOT is created server-side on order creation; a manual KOT
+      // attempt failing (e.g. NO_PENDING_ITEMS race) must not fail the order.
+      console.warn('[BASIC_POS] KOT print skipped:', e?.message);
+    }
+  };
+
   const handlePlaceOrder = async () => {
     if (cartItems.length === 0 || submitting) return;
     setSubmitting('place');
@@ -261,32 +311,56 @@ export default function PosWorkspace() {
         notes: c.notes || undefined,
       }));
       const resp = await orderApi.create({
-        orderType: orderType === 'Dine In' ? 'DINE_IN' : orderType === 'Takeaway' ? 'TAKEAWAY' : 'DELIVERY',
+        // §3: a BASIC_POS food business has no tables — counter orders are
+        // COUNTER_SALE (backend enforces the same and ignores any table).
+        orderType: isBasicPos ? 'COUNTER_SALE' : (orderType === 'Dine In' ? 'DINE_IN' : orderType === 'Takeaway' ? 'TAKEAWAY' : 'DELIVERY'),
         items: itemsPayload,
         notes: '',
       });
-      if (resp.success && resp.data) {
-        const order = resp.data;
-        useCartStore.getState().addOrder({
-          id: `ord-${order.id}`,
-          orderNumber: `#${order.orderNo || order.id}`,
-          tableName: activeOrderTakingId ? `Table ${parseInt(activeOrderTakingId.split('-')[1] || '0')}` : 'Takeaway',
-          guestsCount: guestCount,
-          timestamp: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
-          serverName: 'Staff',
-          status: 'PREP',
-          items: cartItems.map((c) => ({ itemId: c.itemId, name: c.name, price: c.price, quantity: c.quantity, status: 'Pending', notes: c.notes })),
-          orderType,
-          customerName,
-          customerPhone,
-          discountAmount: 0,
-          paymentStatus: 'Pending',
-        });
-        addToast(`Order #${order.orderNo || order.id} placed successfully!`, 'success');
+      if (!resp.success || !resp.data) {
+        throw new Error(resp.message || 'Failed to create order');
+      }
+      // §1/§13: PRODUCTION MODE STOPS HERE — create + KOT + toast + clear,
+      // NEVER touch payment. The direct-payment path below runs ONLY in
+      // quick-billing mode (Quick Billing ON / retail). COUNTER_SALE alone
+      // must never determine whether payment opens.
+      const order = resp.data;
+      if (isBasicPosProduction) {
+        await printCounterKot(order, itemsPayload);
+        addToast(`Order #${order.orderNo || order.id} sent to kitchen.`, 'success');
+        setCartItems([]);
+        incrementRefreshTrigger(); // Active Orders re-fetches on next open
+        setScreen('active_orders');
+        return;
+      }
+      {
+        if (isBasicPos) {
+          // §4: legacy quick-billing BASIC_POS path — kept for backward
+          // compatibility, though the centralized predicate normally routes
+          // here only when Quick Billing is ON (direct payment later in
+          // handlePayment).
+          await printCounterKot(order, itemsPayload);
+          addToast(`Order #${order.orderNo || order.id} sent to kitchen!`, 'success');
+        } else {
+          useCartStore.getState().addOrder({
+            id: `ord-${order.id}`,
+            orderNumber: `#${order.orderNo || order.id}`,
+            tableName: activeOrderTakingId ? `Table ${parseInt(activeOrderTakingId.split('-')[1] || '0')}` : 'Takeaway',
+            guestsCount: guestCount,
+            timestamp: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
+            serverName: 'Staff',
+            status: 'PREP',
+            items: cartItems.map((c) => ({ itemId: c.itemId, name: c.name, price: c.price, quantity: c.quantity, status: 'Pending', notes: c.notes })),
+            orderType,
+            customerName,
+            customerPhone,
+            discountAmount: 0,
+            paymentStatus: 'Pending',
+          });
+          addToast(`Order #${order.orderNo || order.id} placed successfully!`, 'success');
+        }
         setCartItems([]);
         setScreen('dashboard');
-      } else {
-        throw new Error(resp.message || 'Failed to create order');
       }
     } catch (e) {
       addToast(e.message || 'Failed to place order', 'error');
@@ -532,7 +606,7 @@ export default function PosWorkspace() {
           )}
           <div className="min-w-0">
             <h3 className="text-sm font-extrabold text-slate-800 leading-none">
-              {counterSaleMode ? 'Basic POS' : 'POS Ordering'}
+              {counterSaleMode ? 'Basic POS — Quick Billing' : isBasicPos ? 'Basic POS — Counter Order' : 'POS Ordering'}
             </h3>
             <p className="text-[10px] text-slate-400 mt-0.5 truncate">
               {scanMode ? 'Scan products to add them to the sale' : view === 'categories' ? 'Select a category to start' : `${selectedCategory || 'All'} · ${filteredItems.length} items`}
@@ -678,14 +752,22 @@ export default function PosWorkspace() {
           </div>
           <div className="flex gap-1.5">
             <button onClick={() => setCartItems([])} className="flex-1 h-10 border border-slate-200 rounded-xl text-[10px] font-bold text-slate-500 hover:bg-slate-100 cursor-pointer transition-all">Clear</button>
-            {!counterSaleMode && (
-              <button onClick={handlePlaceOrder} disabled={cartItems.length === 0 || submitting !== null}
-                className="flex-[2] h-10 bg-[#16A34A] hover:bg-[#15803D] text-white font-bold rounded-xl text-[10px] uppercase tracking-wider shadow-sm disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer transition-all">
-                {submitting === 'place' ? 'Placing...' : 'Place Order'}
-              </button>
-            )}
+          {/* §6: production mode shows the single primary action here; the
+              direct-PAYMENT button below is hidden (mutually exclusive with
+              Place Order (KOT) — no two competing workflows). */}
+          {!counterSaleMode && (
+            <button onClick={handlePlaceOrder} disabled={cartItems.length === 0 || submitting !== null}
+              className="flex-[2] h-10 bg-[#16A34A] hover:bg-[#15803D] text-white font-bold rounded-xl text-[10px] uppercase tracking-wider shadow-sm disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer transition-all">
+              {submitting === 'place' ? 'Placing...' : (isBasicPos ? 'Place Order (KOT)' : 'Place Order')}
+            </button>
+          )}
           </div>
-          {canBill && (
+          {/* §7/§11: direct PAYMENT shows for quick-billing flows (quick-billing
+              BASIC_POS with enableCounterSale ON, and retail QUICK_BILLING)
+              and is PRESERVED for the existing restaurant flow. Hidden only
+              for BASIC_POS production mode, where Place Order (KOT) is the
+              single order-completion action and payment happens later via Bill. */}
+          {canBill && (counterSaleMode || tablesCapable) && (
             <button
               onClick={handlePayment}
               disabled={(cartItems.length === 0 && !activeOrderTakingId) || submitting !== null}
