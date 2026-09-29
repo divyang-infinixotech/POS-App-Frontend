@@ -1,12 +1,14 @@
-import React, { useEffect, useRef, useCallback, lazy, Suspense } from 'react';
+import React, { useState, useEffect, useRef, useCallback, lazy, Suspense } from 'react';
 import { Loader2 } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
+import apiClient from '../../../api/axios';
 import Sidebar from '../sidebar/Sidebar';
 import Header from '../header/Header';
 import { useAuthStore, useUiStore, useSettingsStore, useCartStore } from '../../../store';
 import LoginPage from '../../../features/auth/pages/LoginPage';
 import ForceChangePasswordPage from '../../../features/auth/pages/ForceChangePasswordPage';
 import LockScreen from './LockScreen';
+import FirstRunWizard from '../../../features/firstrun/FirstRunWizard';
 import { useSocketConnection, useSocketEvent } from '../../../hooks/useSocket';
 import { invalidateMenuData } from '../../../services/menuSync';
 import DashboardPage from '../../../features/dashboard/pages/DashboardPage';
@@ -333,6 +335,32 @@ export default function AppShell() {
   const { settings, lastFetched, fetchSettings, moduleVisibilityVersion } = useSettingsStore();
   const { toasts, apiError, clearApiError } = useUiStore();
 
+  // ── Phase J: first-run wizard gate (declared with the other hooks at the top
+  // of the component — Rules of Hooks; the early returns all sit far below).
+  // 'checking' → status request in flight · 'active' → installation not yet
+  // initialized (wizard renders) · 'done' → initialized, status endpoint said
+  // not-first-run, status unreachable (a LAN terminal fail-opens here because
+  // bootstrap APIs are localhost-only), or the wizard was completed. The catch
+  // fail-opens to the normal login on ANY status error — a status outage must
+  // never brick the terminal into an eternal spinner. ──
+  const [firstRunState, setFirstRunState] = useState('checking');
+  const [wizardDismissed, setWizardDismissed] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    apiClient.get('/system/first-run-status')
+      .then((res) => {
+        if (cancelled) return;
+        // Handles every response shape: raw {firstRun}, wrapped {success, data},
+        // or an un-unwrapped axios response — whichever layer this axios
+        // instance's interceptors settle on.
+        const body = res?.data ?? res;
+        const data = body?.data ?? body;
+        setFirstRunState(data?.firstRun ? 'active' : 'done');
+      })
+      .catch(() => { if (!cancelled) setFirstRunState('done'); });
+    return () => { cancelled = true; };
+  }, []);
+
   // ── Cross-restaurant cache safety ──
   // React Query caches fetched tenant data in memory. When a session ends (logout,
   // lock + switch user, 401 expiry) the cache is cleared so the NEXT restaurant
@@ -535,6 +563,19 @@ export default function AppShell() {
   // Show lock screen if terminal is locked but user is authenticated (token exists)
   if (!isUnlocked && isAuthenticated) {
     return <LockScreen />;
+  }
+
+  // ── Phase J: first-run wizard gate (state declared with other hooks at the
+  // top of the component — Rules of Hooks) ──
+  if (!isUnlocked && !wizardDismissed && firstRunState === 'checking') {
+    return (
+      <div className="min-h-screen bg-[#F8FAFC] flex items-center justify-center">
+        <Loader2 className="w-7 h-7 animate-spin text-[#16A34A]" />
+      </div>
+    );
+  }
+  if (!isUnlocked && !wizardDismissed && firstRunState === 'active') {
+    return <FirstRunWizard onFinished={() => { setWizardDismissed(true); setFirstRunState('done'); }} />;
   }
 
   // Show login if not unlocked and not authenticated. "Create New Account"
